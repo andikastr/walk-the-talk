@@ -3,7 +3,7 @@ import { useFonts } from 'expo-font';
 import { DefaultTheme, Stack, ThemeProvider } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
-import 'react-native-reanimated';
+import { useReducedMotion } from 'react-native-reanimated';
 import {
   SpaceGrotesk_500Medium,
   SpaceGrotesk_600SemiBold,
@@ -71,6 +71,7 @@ export default function RootLayout() {
 
 function RootLayoutNav() {
   const { palette, isDark, t } = usePreferences();
+  const reduced = useReducedMotion();
   useAppUpdates();
 
   const navigationTheme = useMemo(
@@ -97,6 +98,8 @@ function RootLayoutNav() {
         <Stack
           screenOptions={{
             contentStyle: { backgroundColor: palette.surface },
+            animation: reduced ? 'fade' : 'slide_from_right',
+            animationMatchesGesture: true,
           }}
         >
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
@@ -104,6 +107,8 @@ function RootLayoutNav() {
             name="workout/[id]"
             options={{
               title: t.routes.workoutDetail,
+              animation: reduced ? 'fade' : 'slide_from_right',
+              animationMatchesGesture: true,
               headerStyle: { backgroundColor: palette.surface },
               headerTitleStyle: {
                 fontFamily: FONT_FAMILY.displaySemiBold,
@@ -119,6 +124,7 @@ function RootLayoutNav() {
             name="modal"
             options={{
               presentation: 'modal',
+              animation: reduced ? 'fade' : 'fade_from_bottom',
               title: t.routes.infoTitle,
               headerStyle: { backgroundColor: palette.surface },
               headerTitleStyle: {
