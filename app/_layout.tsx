@@ -1,8 +1,8 @@
+import { useEffect, useMemo } from 'react';
 import { useFonts } from 'expo-font';
 import { DefaultTheme, Stack, ThemeProvider } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect } from 'react';
 import 'react-native-reanimated';
 import {
   SpaceGrotesk_500Medium,
@@ -16,8 +16,10 @@ import {
 } from '@expo-google-fonts/inter';
 
 import { useAppUpdates } from '@/hooks/useAppUpdates';
+import { AppPreferencesProvider, usePreferences } from '@/context/AppPreferencesContext';
+import { AppDialogProvider } from '@/context/AppDialogContext';
 import { SpotifyAuthProvider } from '@/context/SpotifyAuthContext';
-import { FONT_FAMILY, PALETTE } from '@/constants/Colors';
+import { FONT_FAMILY } from '@/constants/Colors';
 
 export {
   // Catch any errors thrown by the Layout component.
@@ -31,20 +33,6 @@ export const unstable_settings = {
 
 // Prevent the splash screen from auto-hiding before asset loading is complete.
 SplashScreen.preventAutoHideAsync();
-
-const PaperTheme = {
-  ...DefaultTheme,
-  dark: false,
-  colors: {
-    ...DefaultTheme.colors,
-    primary: PALETTE.accent,
-    background: PALETTE.surface,
-    card: PALETTE.surface,
-    text: PALETTE.onSurface,
-    border: PALETTE.border,
-    notification: PALETTE.accent,
-  },
-};
 
 export default function RootLayout() {
   const [loaded, error] = useFonts({
@@ -72,51 +60,76 @@ export default function RootLayout() {
     return null;
   }
 
-  return <RootLayoutNav />;
+  return (
+    <AppPreferencesProvider>
+      <AppDialogProvider>
+        <RootLayoutNav />
+      </AppDialogProvider>
+    </AppPreferencesProvider>
+  );
 }
 
 function RootLayoutNav() {
+  const { palette, isDark, t } = usePreferences();
   useAppUpdates();
+
+  const navigationTheme = useMemo(
+    () => ({
+      ...DefaultTheme,
+      dark: isDark,
+      colors: {
+        ...DefaultTheme.colors,
+        primary: palette.accent,
+        background: palette.surface,
+        card: palette.surface,
+        text: palette.onSurface,
+        border: palette.border,
+        notification: palette.accent,
+      },
+    }),
+    [isDark, palette]
+  );
 
   return (
     <SpotifyAuthProvider>
-      <ThemeProvider value={PaperTheme}>
-      <StatusBar style="dark" />
-      <Stack
-        screenOptions={{
-          contentStyle: { backgroundColor: PALETTE.surface },
-        }}
-      >
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen
-          name="workout/[id]"
-          options={{
-            title: 'Detail Aktivitas',
-            headerStyle: { backgroundColor: PALETTE.surface },
-            headerTitleStyle: {
-              fontFamily: FONT_FAMILY.displaySemiBold,
-              fontSize: 17,
-              color: PALETTE.onSurface,
-            },
-            headerTintColor: PALETTE.onSurface,
-            headerShadowVisible: false,
-            headerBackTitle: 'Kembali',
+      <ThemeProvider value={navigationTheme}>
+        <StatusBar style={isDark ? 'light' : 'dark'} />
+        <Stack
+          screenOptions={{
+            contentStyle: { backgroundColor: palette.surface },
           }}
-        />
-        <Stack.Screen
-          name="modal"
-          options={{
-            presentation: 'modal',
-            headerStyle: { backgroundColor: PALETTE.surface },
-            headerTitleStyle: {
-              fontFamily: FONT_FAMILY.displaySemiBold,
-              color: PALETTE.onSurface,
-            },
-            headerTintColor: PALETTE.onSurface,
-            headerShadowVisible: false,
-          }}
-        />
-      </Stack>
+        >
+          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+          <Stack.Screen
+            name="workout/[id]"
+            options={{
+              title: t.routes.workoutDetail,
+              headerStyle: { backgroundColor: palette.surface },
+              headerTitleStyle: {
+                fontFamily: FONT_FAMILY.displaySemiBold,
+                fontSize: 17,
+                color: palette.onSurface,
+              },
+              headerTintColor: palette.onSurface,
+              headerShadowVisible: false,
+              headerBackTitle: t.common.back,
+            }}
+          />
+          <Stack.Screen
+            name="modal"
+            options={{
+              presentation: 'modal',
+              title: t.routes.infoTitle,
+              headerStyle: { backgroundColor: palette.surface },
+              headerTitleStyle: {
+                fontFamily: FONT_FAMILY.displaySemiBold,
+                color: palette.onSurface,
+              },
+              headerTintColor: palette.onSurface,
+              headerShadowVisible: false,
+            }}
+          />
+        </Stack>
       </ThemeProvider>
     </SpotifyAuthProvider>
   );

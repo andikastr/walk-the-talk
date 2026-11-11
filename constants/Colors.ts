@@ -4,7 +4,39 @@ import { TextStyle } from 'react-native';
  * Paper & Lime Performance Mobile Design System Tokens
  * Source of truth: DESIGN.md
  */
-export const PALETTE = {
+export type ThemeMode = 'system' | 'light' | 'dark';
+export type ResolvedTheme = 'light' | 'dark';
+
+export interface ThemePalette {
+  primary: string;
+  primaryDeep: string;
+  onPrimary: string;
+  accent: string;
+  surface: string;
+  surfaceAlt: string;
+  surfaceRaised: string;
+  surfaceInverse: string;
+  surfaceFeature: string;
+  surfaceFeatureElevated: string;
+  actionPrimary: string;
+  onActionPrimary: string;
+  modalSurface: string;
+  modalSurfaceAlt: string;
+  onSurface: string;
+  onSurfaceVariant: string;
+  onInverse: string;
+  onInverseMuted: string;
+  onFeature: string;
+  onFeatureMuted: string;
+  border: string;
+  borderStrong: string;
+  neutralSoft: string;
+  backdrop: string;
+  emberTint: string;
+  spotifyGreen: string;
+}
+
+export const LIGHT_PALETTE: ThemePalette = {
   primary: '#D7FE47',          // Electric lime — accent only, never page surface
   primaryDeep: '#C8F02A',      // Pressed lime
   onPrimary: '#0E0F0C',        // Ink on lime
@@ -13,15 +45,56 @@ export const PALETTE = {
   surfaceAlt: '#EBE8E0',       // Paper-alt — default tiles & grouped cards
   surfaceRaised: '#FFFFFF',    // Pure white — list-row cards on paper
   surfaceInverse: '#0E0F0C',   // Ink — dark feature cards & floating tab bar
+  surfaceFeature: '#0E0F0C',   // Feature block canvas (Mini Player, Tab Bar, Soundtrack)
+  surfaceFeatureElevated: '#1B1C18',
+  actionPrimary: '#0E0F0C',    // Primary ink CTA & active chip background
+  onActionPrimary: '#F4F2EC',  // Text on primary CTA & active chip
+  modalSurface: '#F4F2EC',     // Custom dialog / sheet surface
+  modalSurfaceAlt: '#EBE8E0',  // Secondary tiles, inputs, cancel pills inside modals
   onSurface: '#0E0F0C',        // Ink — primary text
   onSurfaceVariant: '#8A8A82', // Mute — metadata, kickers, secondary text
   onInverse: '#F4F2EC',        // Paper text on ink
   onInverseMuted: 'rgba(244, 242, 236, 0.62)', // Subdued text on ink
+  onFeature: '#F4F2EC',
+  onFeatureMuted: 'rgba(244, 242, 236, 0.62)',
   border: '#E3E0D7',           // Hairline dividers & ring tracks
   borderStrong: '#DDDAD1',     // Progress track fill
   neutralSoft: '#C8C5BA',      // De-emphasized data bar fill
+  backdrop: 'rgba(14, 15, 12, 0.55)',
+  emberTint: 'rgba(255, 90, 31, 0.12)',
   spotifyGreen: '#1DB954',     // Brand-compliant Spotify attribution & CTA
-} as const;
+};
+
+export const DARK_PALETTE: ThemePalette = {
+  primary: '#D7FE47',          // Electric lime — strictly rationed accent
+  primaryDeep: '#C8F02A',      // Pressed lime
+  onPrimary: '#0E0F0C',        // Ink on lime
+  accent: '#FF5A1F',           // Ember orange — hero metrics & alerts only
+  surface: '#0E0F0C',          // Deep obsidian ink — global page background
+  surfaceAlt: '#181A15',       // Charcoal-alt — default tiles & grouped cards
+  surfaceRaised: '#22251E',    // Elevated tonal list-row surface on dark canvas
+  surfaceInverse: '#F4F2EC',   // Warm paper inverse contrast on dark canvas
+  surfaceFeature: '#161813',   // Dedicated dark feature block surface
+  surfaceFeatureElevated: '#23261F',
+  actionPrimary: '#F4F2EC',    // Paper pill CTA & active filter chip on dark canvas
+  onActionPrimary: '#0E0F0C',  // Ink text on paper pill CTA
+  modalSurface: '#191B16',     // Custom modal/sheet surface lifted off dimmed backdrop
+  modalSurfaceAlt: '#242720',  // Inputs, stat boxes & cancel pills inside dark modals
+  onSurface: '#F4F2EC',        // Warm paper — primary text
+  onSurfaceVariant: '#9E9D93', // Balanced neutral mute on dark canvas
+  onInverse: '#0E0F0C',        // Ink text on paper inverse
+  onInverseMuted: 'rgba(14, 15, 12, 0.62)',
+  onFeature: '#F4F2EC',        // Paper text on feature block
+  onFeatureMuted: 'rgba(244, 242, 236, 0.64)',
+  border: '#2B2E25',           // Dark hairline divider
+  borderStrong: '#383C31',
+  neutralSoft: '#45493E',      // Empty chart bar fill on dark canvas
+  backdrop: 'rgba(0, 0, 0, 0.72)',
+  emberTint: 'rgba(255, 90, 31, 0.18)',
+  spotifyGreen: '#1DB954',
+};
+
+export const PALETTE = LIGHT_PALETTE;
 
 // Legacy/semantic aliases kept in sync with DESIGN.md
 export const PRIMARY_ORANGE = PALETTE.accent;
@@ -172,25 +245,25 @@ export const TYPOGRAPHY = {
   } satisfies TextStyle,
 } as const;
 
-const paperTheme = {
-  text: PALETTE.onSurface,
-  textMuted: PALETTE.onSurfaceVariant,
-  background: PALETTE.surface,
-  card: PALETTE.surfaceAlt,
-  cardRaised: PALETTE.surfaceRaised,
-  cardInverse: PALETTE.surfaceInverse,
-  border: PALETTE.border,
-  tint: PALETTE.primary,
-  accent: PALETTE.accent,
-  tabIconDefault: PALETTE.onInverseMuted,
-  tabIconSelected: PALETTE.onPrimary,
-  spotify: PALETTE.spotifyGreen,
-  hudBackground: PALETTE.surfaceInverse,
-  hudText: PALETTE.onInverse,
-  hudAccent: PALETTE.accent,
-};
+const buildLegacyTheme = (p: ThemePalette) => ({
+  text: p.onSurface,
+  textMuted: p.onSurfaceVariant,
+  background: p.surface,
+  card: p.surfaceAlt,
+  cardRaised: p.surfaceRaised,
+  cardInverse: p.surfaceFeature,
+  border: p.border,
+  tint: p.primary,
+  accent: p.accent,
+  tabIconDefault: p.onFeatureMuted,
+  tabIconSelected: p.onPrimary,
+  spotify: p.spotifyGreen,
+  hudBackground: p.surfaceFeature,
+  hudText: p.onFeature,
+  hudAccent: p.accent,
+});
 
 export default {
-  light: paperTheme,
-  dark: paperTheme,
+  light: buildLegacyTheme(LIGHT_PALETTE),
+  dark: buildLegacyTheme(DARK_PALETTE),
 };

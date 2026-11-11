@@ -8,9 +8,6 @@ import {
   Image,
   ActivityIndicator,
   FlatList,
-  Alert,
-  Modal,
-  TextInput,
 } from 'react-native';
 import { FontAwesome } from '@expo/vector-icons';
 import {
@@ -35,16 +32,12 @@ import { useSpotifyAuth } from '@/hooks/useSpotifyAuth';
 import { useSpotifyPlayer } from '@/hooks/useSpotifyPlayer';
 import { getUserPlaylists, playMusic } from '@/services/spotify/player';
 import { SpotifyPlaylist } from '@/types/spotify';
-import {
-  FONT_FAMILY,
-  PALETTE,
-  RADIUS,
-  SPACING,
-  SPOTIFY_GREEN,
-  TYPOGRAPHY,
-} from '@/constants/Colors';
+import { FONT_FAMILY, RADIUS, SPACING, TYPOGRAPHY } from '@/constants/Colors';
+import { usePreferences } from '@/context/AppPreferencesContext';
+import { useAppDialog } from '@/context/AppDialogContext';
 import { SpotifyAttribution } from '@/components/spotify/SpotifyAttribution';
 import { DevicePickerModal } from '@/components/spotify/DevicePickerModal';
+import { SpotifyManualAuthModal } from '@/components/spotify/SpotifyManualAuthModal';
 import {
   IconCircleButton,
   KickerText,
@@ -54,6 +47,8 @@ import { SPOTIFY_CONFIG } from '@/constants/Config';
 
 export default function MusicScreen() {
   const insets = useSafeAreaInsets();
+  const { palette, isDark, t } = usePreferences();
+  const { alert, confirm, showDialog } = useAppDialog();
   const {
     isAuthenticated,
     isLoading: isAuthLoading,
@@ -65,7 +60,6 @@ export default function MusicScreen() {
   } = useSpotifyAuth();
 
   const [manualModalVisible, setManualModalVisible] = useState(false);
-  const [pastedLink, setPastedLink] = useState('');
 
   const {
     currentTrack,
@@ -131,31 +125,38 @@ export default function MusicScreen() {
       }
       await playMusic({ contextUri: playlist.uri, deviceId: targetDeviceId || undefined });
     } catch (err: any) {
-      Alert.alert(
-        'Pemutaran Playlist',
-        err.message ||
-          'Tidak dapat memutar playlist. Pastikan aplikasi Spotify aktif di perangkat Anda.',
-        [
-          { text: 'Tutup', style: 'cancel' },
-          { text: 'Bangunkan Spotify', onPress: wakeUpSpotify },
-        ]
-      );
+      const picked = await showDialog({
+        kicker: t.common.warningKicker,
+        title: t.music.playlistErrorTitle,
+        message: err?.message || t.music.playlistErrorDefault,
+        tone: 'error',
+        actions: [
+          { id: 'close', label: t.common.close, variant: 'secondary' },
+          { id: 'wake', label: t.music.wakeSpotifyAction, variant: 'primary' },
+        ],
+      });
+      if (picked === 'wake') {
+        await wakeUpSpotify();
+      }
     }
   };
 
-  const handleLogout = () => {
-    Alert.alert('Keluar dari Spotify', 'Apakah Anda ingin memutuskan koneksi Spotify?', [
-      { text: 'Batal', style: 'cancel' },
-      {
-        text: 'Keluar',
-        style: 'destructive',
-        onPress: async () => {
-          setPlaylists([]);
-          await logout();
-        },
-      },
-    ]);
+  const handleLogout = async () => {
+    const confirmed = await confirm({
+      kicker: t.common.warningKicker,
+      title: t.music.logoutTitle,
+      message: t.music.logoutMessage,
+      cancelText: t.common.cancel,
+      confirmText: t.music.logoutAction,
+      destructive: true,
+    });
+    if (confirmed) {
+      setPlaylists([]);
+      await logout();
+    }
   };
+
+  const darkSurfaceBorder = isDark ? { borderWidth: 1, borderColor: palette.border } : undefined;
 
   // TAMPILAN BELUM LOGIN
   if (!isAuthenticated) {
@@ -164,39 +165,60 @@ export default function MusicScreen() {
 
     return (
       <ScrollView
-        style={styles.container}
+        style={[styles.container, { backgroundColor: palette.surface }]}
         contentContainerStyle={[styles.notAuthContent, { paddingTop: topPad }]}
         showsVerticalScrollIndicator={false}
       >
-        <View style={styles.emblemCard}>
-          <FontAwesome name="spotify" size={44} color={SPOTIFY_GREEN} />
+        <View
+          style={[
+            styles.emblemCard,
+            { backgroundColor: palette.surfaceFeature },
+            darkSurfaceBorder,
+          ]}
+        >
+          <FontAwesome name="spotify" size={44} color={palette.spotifyGreen} />
         </View>
 
-        <KickerText style={{ marginTop: 22 }}>AUDIO PENDAMPING LARI</KickerText>
-        <Text style={styles.heroTitle}>Koneksikan Spotify</Text>
-        <Text style={styles.heroSubtitle}>
-          Dengarkan playlist favorit langsung dari HUD lari tanpa berpindah aplikasi saat berolahraga.
+        <KickerText style={{ marginTop: 22 }}>{t.music.unauthKicker}</KickerText>
+        <Text style={[styles.heroTitle, { color: palette.onSurface }]}>
+          {t.music.unauthTitle}
+        </Text>
+        <Text style={[styles.heroSubtitle, { color: palette.onSurfaceVariant }]}>
+          {t.music.unauthSubtitle}
         </Text>
 
         {!isClientIdConfigured && (
-          <View style={styles.noticeCard}>
-            <AlertTriangle size={18} strokeWidth={2} color={PALETTE.accent} />
-            <Text style={styles.noticeText}>
-              Client ID belum diisi. Masukkan Spotify Client ID pada file .env (EXPO_PUBLIC_SPOTIFY_CLIENT_ID) lalu restart aplikasi.
+          <View
+            style={[
+              styles.noticeCard,
+              { backgroundColor: palette.surfaceAlt },
+              darkSurfaceBorder,
+            ]}
+          >
+            <AlertTriangle size={18} strokeWidth={2} color={palette.accent} />
+            <Text style={[styles.noticeText, { color: palette.onSurface }]}>
+              {t.music.missingClientId}
             </Text>
           </View>
         )}
 
         {authError ? (
-          <View style={styles.noticeCard}>
-            <View style={styles.emberDot} />
-            <Text style={styles.noticeText}>{authError}</Text>
+          <View
+            style={[
+              styles.noticeCard,
+              { backgroundColor: palette.surfaceAlt },
+              darkSurfaceBorder,
+            ]}
+          >
+            <View style={[styles.emberDot, { backgroundColor: palette.accent }]} />
+            <Text style={[styles.noticeText, { color: palette.onSurface }]}>{authError}</Text>
           </View>
         ) : null}
 
         <Pressable
           style={({ pressed }) => [
             styles.loginButton,
+            { backgroundColor: palette.spotifyGreen },
             !isClientIdConfigured && { opacity: 0.55 },
             pressed && { opacity: 0.86 },
           ]}
@@ -204,11 +226,11 @@ export default function MusicScreen() {
           disabled={isAuthLoading || !isClientIdConfigured}
         >
           {isAuthLoading ? (
-            <ActivityIndicator color={PALETTE.surfaceRaised} />
+            <ActivityIndicator color="#FFFFFF" />
           ) : (
             <>
-              <FontAwesome name="spotify" size={20} color={PALETTE.surfaceRaised} />
-              <Text style={styles.loginButtonText}>Masuk dengan Spotify</Text>
+              <FontAwesome name="spotify" size={20} color="#FFFFFF" />
+              <Text style={styles.loginButtonText}>{t.music.loginBtn}</Text>
             </>
           )}
         </Pressable>
@@ -217,107 +239,80 @@ export default function MusicScreen() {
           style={({ pressed }) => [styles.pasteLinkPrompt, pressed && { opacity: 0.72 }]}
           onPress={() => setManualModalVisible(true)}
         >
-          <Link2 size={15} strokeWidth={2} color={PALETTE.onSurfaceVariant} />
-          <Text style={styles.pasteLinkPromptText}>
-            Tombol &quot;Return to the app&quot; macet? Tempel link di sini
+          <Link2 size={15} strokeWidth={2} color={palette.onSurfaceVariant} />
+          <Text style={[styles.pasteLinkPromptText, { color: palette.onSurfaceVariant }]}>
+            {t.music.manualPrompt}
           </Text>
         </Pressable>
 
-        <Modal visible={manualModalVisible} transparent animationType="fade">
-          <View style={styles.modalBackdrop}>
-            <View style={styles.manualModalCard}>
-              <KickerText>OTENTIKASI MANUAL</KickerText>
-              <Text style={styles.manualModalTitle}>Selesaikan Login Manual</Text>
-              <Text style={styles.manualModalDesc}>
-                Jika browser tidak otomatis kembali ke app:
-                {'\n'}1. Tekan &amp; tahan tombol &quot;Return to the app&quot;.
-                {'\n'}2. Pilih &quot;Copy link address&quot;.
-                {'\n'}3. Tempel link tersebut di bawah ini:
-              </Text>
+        <SpotifyManualAuthModal
+          visible={manualModalVisible}
+          isSubmitting={isAuthLoading}
+          onClose={() => setManualModalVisible(false)}
+          onSubmitUrl={completeManualAuth}
+          onSuccess={() => {
+            void alert({
+              kicker: t.common.successKicker,
+              title: t.music.manualSuccessTitle,
+              message: t.music.manualSuccessMessage,
+              tone: 'success',
+            });
+          }}
+        />
 
-              <TextInput
-                style={styles.manualInput}
-                value={pastedLink}
-                onChangeText={setPastedLink}
-                placeholder="Tempel link yang disalin di sini..."
-                placeholderTextColor={PALETTE.onSurfaceVariant}
-                autoCapitalize="none"
-                autoCorrect={false}
-              />
-
-              <View style={styles.manualModalActions}>
-                <Pressable
-                  style={({ pressed }) => [styles.cancelBtn, pressed && { opacity: 0.75 }]}
-                  onPress={() => {
-                    setManualModalVisible(false);
-                    setPastedLink('');
-                  }}
-                >
-                  <Text style={styles.cancelBtnText}>Batal</Text>
-                </Pressable>
-
-                <Pressable
-                  style={({ pressed }) => [
-                    styles.submitBtn,
-                    !pastedLink.trim() && { opacity: 0.5 },
-                    pressed && { opacity: 0.85 },
-                  ]}
-                  disabled={!pastedLink.trim() || isAuthLoading}
-                  onPress={async () => {
-                    if (!pastedLink.trim()) return;
-                    const res = await completeManualAuth(pastedLink.trim());
-                    if (res.success) {
-                      setManualModalVisible(false);
-                      setPastedLink('');
-                      Alert.alert('Sukses', 'Akun Spotify Anda berhasil terhubung.');
-                    } else {
-                      Alert.alert(
-                        'Gagal Login',
-                        res.error || 'Terjadi kesalahan saat memproses link.'
-                      );
-                    }
-                  }}
-                >
-                  {isAuthLoading ? (
-                    <ActivityIndicator size="small" color={PALETTE.surface} />
-                  ) : (
-                    <Text style={styles.submitBtnText}>Selesaikan</Text>
-                  )}
-                </Pressable>
-              </View>
-            </View>
-          </View>
-        </Modal>
-
-        <View style={styles.featuresCard}>
+        <View
+          style={[
+            styles.featuresCard,
+            { backgroundColor: palette.surfaceAlt },
+            darkSurfaceBorder,
+          ]}
+        >
           <View style={styles.featureItem}>
-            <View style={styles.featureIconCircle}>
-              <ShieldCheck size={17} strokeWidth={2} color={PALETTE.onSurface} />
+            <View
+              style={[
+                styles.featureIconCircle,
+                { backgroundColor: palette.surfaceRaised },
+                darkSurfaceBorder,
+              ]}
+            >
+              <ShieldCheck size={17} strokeWidth={2} color={palette.onSurface} />
             </View>
-            <Text style={styles.featureText}>
-              Autentikasi aman via PKCE (tanpa menyimpan password atau secret).
+            <Text style={[styles.featureText, { color: palette.onSurface }]}>
+              {t.music.featurePkce}
             </Text>
           </View>
 
-          <View style={styles.hairline} />
+          <View style={[styles.hairline, { backgroundColor: palette.border }]} />
 
           <View style={styles.featureItem}>
-            <View style={styles.featureIconCircle}>
-              <Smartphone size={17} strokeWidth={2} color={PALETTE.onSurface} />
+            <View
+              style={[
+                styles.featureIconCircle,
+                { backgroundColor: palette.surfaceRaised },
+                darkSurfaceBorder,
+              ]}
+            >
+              <Smartphone size={17} strokeWidth={2} color={palette.onSurface} />
             </View>
-            <Text style={styles.featureText}>
-              Terhubung otomatis dengan Spotify Connect di HP atau earphone TWS Anda.
+            <Text style={[styles.featureText, { color: palette.onSurface }]}>
+              {t.music.featureConnect}
             </Text>
           </View>
 
-          <View style={styles.hairline} />
+          <View style={[styles.hairline, { backgroundColor: palette.border }]} />
 
           <View style={styles.featureItem}>
-            <View style={styles.featureIconCircle}>
-              <Zap size={17} strokeWidth={2} color={PALETTE.onSurface} />
+            <View
+              style={[
+                styles.featureIconCircle,
+                { backgroundColor: palette.surfaceRaised },
+                darkSurfaceBorder,
+              ]}
+            >
+              <Zap size={17} strokeWidth={2} color={palette.onSurface} />
             </View>
-            <Text style={styles.featureText}>
-              Kontrol play, pause, dan skip langsung dari layar lari Anda.
+            <Text style={[styles.featureText, { color: palette.onSurface }]}>
+              {t.music.featureControls}
             </Text>
           </View>
         </View>
@@ -335,58 +330,77 @@ export default function MusicScreen() {
 
   return (
     <ScrollView
-      style={styles.container}
+      style={[styles.container, { backgroundColor: palette.surface }]}
       contentContainerStyle={styles.content}
       showsVerticalScrollIndicator={false}
     >
       <TopAppBar
         kicker={isPremium ? 'SPOTIFY PREMIUM' : 'SPOTIFY FREE'}
-        title={user?.display_name || 'Pengguna Spotify'}
+        title={user?.display_name || t.music.defaultUserName}
         avatarUrl={user?.images?.[0]?.url}
         rightActions={
           <>
             <IconCircleButton
-              accessibilityLabel="Muat ulang perangkat dan playlist"
-              icon={<RefreshCw size={17} strokeWidth={2} color={PALETTE.onSurface} />}
+              accessibilityLabel={t.music.refreshA11y}
+              icon={<RefreshCw size={17} strokeWidth={2} color={palette.onSurface} />}
               onPress={() => {
                 refreshDevices();
                 loadPlaylists();
               }}
             />
             <IconCircleButton
-              accessibilityLabel="Keluar dari Spotify"
-              icon={<LogOut size={17} strokeWidth={2} color={PALETTE.onSurface} />}
-              onPress={handleLogout}
+              accessibilityLabel={t.music.logoutA11y}
+              icon={<LogOut size={17} strokeWidth={2} color={palette.onSurface} />}
+              onPress={() => void handleLogout()}
             />
           </>
         }
       />
 
       {!isPremium && (
-        <View style={styles.freeNoticeBox}>
-          <Info size={16} strokeWidth={2} color={PALETTE.onSurfaceVariant} />
-          <Text style={styles.freeNoticeText}>
-            Akun Free dibatasi oleh Spotify Web API untuk kontrol playback langsung, namun lagu yang sedang diputar tetap ditampilkan di HUD lari.
+        <View
+          style={[
+            styles.freeNoticeBox,
+            { backgroundColor: palette.surfaceAlt },
+            darkSurfaceBorder,
+          ]}
+        >
+          <Info size={16} strokeWidth={2} color={palette.onSurfaceVariant} />
+          <Text style={[styles.freeNoticeText, { color: palette.onSurfaceVariant }]}>
+            {t.music.freeNotice}
           </Text>
         </View>
       )}
 
       {/* Perangkat Spotify Connect */}
-      <View style={styles.deviceCard}>
+      <View
+        style={[
+          styles.deviceCard,
+          { backgroundColor: palette.surfaceAlt },
+          darkSurfaceBorder,
+        ]}
+      >
         <View style={styles.deviceCardHeader}>
           <View style={styles.deviceLabelRow}>
-            <Speaker size={15} strokeWidth={2} color={PALETTE.onSurface} />
-            <KickerText>PERANGKAT SPOTIFY CONNECT</KickerText>
+            <Speaker size={15} strokeWidth={2} color={palette.onSurface} />
+            <KickerText>{t.music.deviceKicker}</KickerText>
           </View>
 
           <Pressable
-            style={({ pressed }) => [styles.switchDeviceBtn, pressed && { opacity: 0.78 }]}
+            style={({ pressed }) => [
+              styles.switchDeviceBtn,
+              { backgroundColor: palette.surfaceRaised },
+              darkSurfaceBorder,
+              pressed && { opacity: 0.78 },
+            ]}
             onPress={() => {
               refreshDevices();
               setDeviceModalVisible(true);
             }}
           >
-            <Text style={styles.switchDeviceBtnText}>Ganti</Text>
+            <Text style={[styles.switchDeviceBtnText, { color: palette.onSurface }]}>
+              {t.music.switchDevice}
+            </Text>
           </Pressable>
         </View>
 
@@ -394,42 +408,68 @@ export default function MusicScreen() {
           <View
             style={[
               styles.statusDot,
-              { backgroundColor: activeDevice ? SPOTIFY_GREEN : PALETTE.onSurfaceVariant },
+              {
+                backgroundColor: activeDevice
+                  ? palette.spotifyGreen
+                  : palette.onSurfaceVariant,
+              },
             ]}
           />
-          <Text style={styles.activeDeviceName} numberOfLines={1}>
-            {activeDevice ? activeDevice.name : 'Tidak ada perangkat aktif'}
+          <Text
+            style={[styles.activeDeviceName, { color: palette.onSurface }]}
+            numberOfLines={1}
+          >
+            {activeDevice ? activeDevice.name : t.music.noActiveDevice}
           </Text>
         </View>
 
-        <Text style={styles.activeDeviceDesc}>
+        <Text style={[styles.activeDeviceDesc, { color: palette.onSurfaceVariant }]}>
           {activeDevice
-            ? `Tipe: ${activeDevice.type} • Status: Aktif`
-            : 'Aplikasi Spotify di HP belum terhubung ke Spotify Connect.'}
+            ? t.music.deviceDetails(activeDevice.type)
+            : t.music.deviceInactiveHint}
         </Text>
 
         {!activeDevice && (
           <Pressable
-            style={({ pressed }) => [styles.wakeUpBtn, pressed && { opacity: 0.85 }]}
+            style={({ pressed }) => [
+              styles.wakeUpBtn,
+              { backgroundColor: palette.actionPrimary },
+              pressed && { opacity: 0.85 },
+            ]}
             onPress={wakeUpSpotify}
           >
-            <Zap size={14} strokeWidth={2} color={PALETTE.surface} />
-            <Text style={styles.wakeUpBtnText}>Bangunkan Spotify (1-Klik)</Text>
+            <Zap size={14} strokeWidth={2} color={palette.onActionPrimary} />
+            <Text style={[styles.wakeUpBtnText, { color: palette.onActionPrimary }]}>
+              {t.music.wakeUpBtn}
+            </Text>
           </Pressable>
         )}
       </View>
 
       {/* Kartu Now Playing (Dark Ink Surface) */}
-      <View style={styles.nowPlayingCard}>
+      <View
+        style={[
+          styles.nowPlayingCard,
+          { backgroundColor: palette.surfaceFeature },
+          darkSurfaceBorder,
+        ]}
+      >
         <View style={styles.nowPlayingHeader}>
-          <KickerText inverse>SEDANG DIPUTAR</KickerText>
+          <KickerText inverse>{t.music.nowPlayingKicker}</KickerText>
           <SpotifyAttribution size="small" variant="dark" />
         </View>
 
         {playerError ? (
-          <View style={styles.playerErrorBox}>
-            <View style={styles.emberDot} />
-            <Text style={styles.playerErrorText}>{playerError}</Text>
+          <View
+            style={[
+              styles.playerErrorBox,
+              { backgroundColor: palette.surfaceFeatureElevated },
+            ]}
+          >
+            <View style={[styles.emberDot, { backgroundColor: palette.accent }]} />
+            <Text style={[styles.playerErrorText, { color: palette.onFeature }]}>
+              {playerError}
+            </Text>
           </View>
         ) : null}
 
@@ -438,15 +478,27 @@ export default function MusicScreen() {
             {albumImage ? (
               <Image source={{ uri: albumImage }} style={styles.nowPlayingArt} resizeMode="cover" />
             ) : (
-              <View style={[styles.nowPlayingArt, styles.nowPlayingArtPlaceholder]}>
-                <Music size={36} strokeWidth={2} color={PALETTE.onInverseMuted} />
+              <View
+                style={[
+                  styles.nowPlayingArt,
+                  styles.nowPlayingArtPlaceholder,
+                  { backgroundColor: palette.surfaceFeatureElevated },
+                ]}
+              >
+                <Music size={36} strokeWidth={2} color={palette.onFeatureMuted} />
               </View>
             )}
 
-            <Text style={styles.nowPlayingTrackTitle} numberOfLines={1}>
+            <Text
+              style={[styles.nowPlayingTrackTitle, { color: palette.onFeature }]}
+              numberOfLines={1}
+            >
               {currentTrack.name}
             </Text>
-            <Text style={styles.nowPlayingTrackArtist} numberOfLines={1}>
+            <Text
+              style={[styles.nowPlayingTrackArtist, { color: palette.onFeatureMuted }]}
+              numberOfLines={1}
+            >
               {currentTrack.artists?.map((a) => a.name).join(', ')}
             </Text>
 
@@ -454,9 +506,13 @@ export default function MusicScreen() {
               <Pressable
                 onPress={previous}
                 disabled={isPlayerLoading}
-                style={({ pressed }) => [styles.ctrlBtn, pressed && { opacity: 0.72 }]}
+                style={({ pressed }) => [
+                  styles.ctrlBtn,
+                  { backgroundColor: palette.surfaceFeatureElevated },
+                  pressed && { opacity: 0.72 },
+                ]}
               >
-                <SkipBack size={22} strokeWidth={2} color={PALETTE.onInverse} />
+                <SkipBack size={22} strokeWidth={2} color={palette.onFeature} />
               </Pressable>
 
               <Pressable
@@ -464,18 +520,18 @@ export default function MusicScreen() {
                 disabled={isPlayerLoading}
                 style={({ pressed }) => [
                   styles.mainPlayBtn,
-                  pressed && { backgroundColor: PALETTE.primaryDeep },
+                  { backgroundColor: pressed ? palette.primaryDeep : palette.primary },
                 ]}
               >
                 {isPlayerLoading ? (
-                  <ActivityIndicator color={PALETTE.onPrimary} />
+                  <ActivityIndicator color={palette.onPrimary} />
                 ) : isPlaying ? (
-                  <Pause size={26} strokeWidth={2} color={PALETTE.onPrimary} />
+                  <Pause size={26} strokeWidth={2} color={palette.onPrimary} />
                 ) : (
                   <Play
                     size={26}
                     strokeWidth={2}
-                    color={PALETTE.onPrimary}
+                    color={palette.onPrimary}
                     style={{ marginLeft: 2 }}
                   />
                 )}
@@ -484,28 +540,45 @@ export default function MusicScreen() {
               <Pressable
                 onPress={next}
                 disabled={isPlayerLoading}
-                style={({ pressed }) => [styles.ctrlBtn, pressed && { opacity: 0.72 }]}
+                style={({ pressed }) => [
+                  styles.ctrlBtn,
+                  { backgroundColor: palette.surfaceFeatureElevated },
+                  pressed && { opacity: 0.72 },
+                ]}
               >
-                <SkipForward size={22} strokeWidth={2} color={PALETTE.onInverse} />
+                <SkipForward size={22} strokeWidth={2} color={palette.onFeature} />
               </Pressable>
             </View>
           </View>
         ) : (
           <View style={styles.idlePlayer}>
-            <View style={styles.idleArtIcon}>
-              <Disc3 size={34} strokeWidth={1.8} color={PALETTE.onInverseMuted} />
+            <View
+              style={[
+                styles.idleArtIcon,
+                { backgroundColor: palette.surfaceFeatureElevated },
+              ]}
+            >
+              <Disc3 size={34} strokeWidth={1.8} color={palette.onFeatureMuted} />
             </View>
-            <Text style={styles.idlePlayerText}>Tidak ada musik yang sedang diputar</Text>
-            <Text style={styles.idlePlayerSub}>
-              Pilih playlist di bawah atau putar langsung dari Spotify
+            <Text style={[styles.idlePlayerText, { color: palette.onFeature }]}>
+              {t.music.nothingPlaying}
+            </Text>
+            <Text style={[styles.idlePlayerSub, { color: palette.onFeatureMuted }]}>
+              {t.music.nothingPlayingSub}
             </Text>
             {!activeDevice && (
               <Pressable
-                style={({ pressed }) => [styles.wakeUpInverseBtn, pressed && { opacity: 0.85 }]}
+                style={({ pressed }) => [
+                  styles.wakeUpInverseBtn,
+                  { backgroundColor: palette.primary },
+                  pressed && { opacity: 0.85 },
+                ]}
                 onPress={wakeUpSpotify}
               >
-                <Zap size={14} strokeWidth={2} color={PALETTE.onSurface} />
-                <Text style={styles.wakeUpInverseBtnText}>Bangunkan Spotify di HP</Text>
+                <Zap size={14} strokeWidth={2} color={palette.onPrimary} />
+                <Text style={[styles.wakeUpInverseBtnText, { color: palette.onPrimary }]}>
+                  {t.music.wakeUpInverseBtn}
+                </Text>
               </Pressable>
             )}
           </View>
@@ -515,21 +588,31 @@ export default function MusicScreen() {
       {/* Koleksi Playlist */}
       <View style={styles.sectionHeader}>
         <View>
-          <KickerText>KOLEKSI ANDA</KickerText>
-          <Text style={styles.sectionTitle}>Playlist Lari</Text>
+          <KickerText>{t.music.collectionKicker}</KickerText>
+          <Text style={[styles.sectionTitle, { color: palette.onSurface }]}>
+            {t.music.playlistsHeading}
+          </Text>
         </View>
         <IconCircleButton
-          accessibilityLabel="Muat ulang playlist"
-          icon={<RefreshCw size={16} strokeWidth={2} color={PALETTE.onSurface} />}
+          accessibilityLabel={t.music.refreshPlaylistA11y}
+          icon={<RefreshCw size={16} strokeWidth={2} color={palette.onSurface} />}
           onPress={loadPlaylists}
         />
       </View>
 
       {isLoadingPlaylists ? (
-        <ActivityIndicator color={PALETTE.onSurface} style={{ marginVertical: 24 }} />
+        <ActivityIndicator color={palette.onSurface} style={{ marginVertical: 24 }} />
       ) : playlists.length === 0 ? (
-        <View style={styles.emptyPlaylists}>
-          <Text style={styles.emptyPlaylistsText}>Tidak ada playlist ditemukan.</Text>
+        <View
+          style={[
+            styles.emptyPlaylists,
+            { backgroundColor: palette.surfaceAlt },
+            darkSurfaceBorder,
+          ]}
+        >
+          <Text style={[styles.emptyPlaylistsText, { color: palette.onSurfaceVariant }]}>
+            {t.music.emptyPlaylists}
+          </Text>
         </View>
       ) : (
         <FlatList
@@ -542,21 +625,37 @@ export default function MusicScreen() {
             const img = item.images?.[0]?.url;
             return (
               <Pressable
-                style={({ pressed }) => [styles.playlistCard, pressed && { opacity: 0.84 }]}
-                onPress={() => handlePlayPlaylist(item)}
+                style={({ pressed }) => [
+                  styles.playlistCard,
+                  { backgroundColor: palette.surfaceRaised },
+                  darkSurfaceBorder,
+                  pressed && { opacity: 0.84 },
+                ]}
+                onPress={() => void handlePlayPlaylist(item)}
               >
                 {img ? (
                   <Image source={{ uri: img }} style={styles.playlistImage} resizeMode="cover" />
                 ) : (
-                  <View style={[styles.playlistImage, styles.playlistImagePlaceholder]}>
-                    <Music size={24} strokeWidth={2} color={PALETTE.onSurfaceVariant} />
+                  <View
+                    style={[
+                      styles.playlistImage,
+                      styles.playlistImagePlaceholder,
+                      { backgroundColor: palette.surfaceAlt },
+                    ]}
+                  >
+                    <Music size={24} strokeWidth={2} color={palette.onSurfaceVariant} />
                   </View>
                 )}
-                <Text style={styles.playlistName} numberOfLines={1}>
+                <Text
+                  style={[styles.playlistName, { color: palette.onSurface }]}
+                  numberOfLines={1}
+                >
                   {item.name}
                 </Text>
-                <Text style={styles.playlistTrackCount}>
-                  {item.tracks?.total ? `${item.tracks.total} lagu` : 'Playlist'}
+                <Text style={[styles.playlistTrackCount, { color: palette.onSurfaceVariant }]}>
+                  {item.tracks?.total
+                    ? `${item.tracks.total} ${t.common.tracksUnit}`
+                    : t.music.playlistLabel}
                 </Text>
               </Pressable>
             );
@@ -582,7 +681,6 @@ export default function MusicScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: PALETTE.surface,
   },
   content: {
     paddingBottom: 112,
@@ -598,7 +696,6 @@ const styles = StyleSheet.create({
     height: 88,
     borderRadius: RADIUS.lg,
     borderCurve: 'continuous',
-    backgroundColor: PALETTE.surfaceInverse,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -607,14 +704,12 @@ const styles = StyleSheet.create({
     fontSize: 28,
     lineHeight: 32,
     letterSpacing: -0.84,
-    color: PALETTE.onSurface,
     marginTop: 8,
     marginBottom: 10,
     textAlign: 'center',
   },
   heroSubtitle: {
     ...TYPOGRAPHY.bodyMd,
-    color: PALETTE.onSurfaceVariant,
     textAlign: 'center',
     marginBottom: 24,
     paddingHorizontal: 8,
@@ -623,7 +718,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    backgroundColor: PALETTE.surfaceAlt,
     borderRadius: RADIUS.md,
     borderCurve: 'continuous',
     padding: 14,
@@ -633,21 +727,18 @@ const styles = StyleSheet.create({
   noticeText: {
     ...TYPOGRAPHY.bodyMd,
     lineHeight: 19,
-    color: PALETTE.onSurface,
     flex: 1,
   },
   emberDot: {
     width: 6,
     height: 6,
     borderRadius: 3,
-    backgroundColor: PALETTE.accent,
   },
   loginButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 10,
-    backgroundColor: SPOTIFY_GREEN,
     paddingVertical: 16,
     paddingHorizontal: 28,
     borderRadius: RADIUS.full,
@@ -656,7 +747,7 @@ const styles = StyleSheet.create({
   },
   loginButtonText: {
     fontFamily: FONT_FAMILY.displaySemiBold,
-    color: PALETTE.surfaceRaised,
+    color: '#FFFFFF',
     fontSize: 15,
     letterSpacing: -0.15,
   },
@@ -671,14 +762,12 @@ const styles = StyleSheet.create({
   },
   pasteLinkPromptText: {
     fontFamily: FONT_FAMILY.bodyMedium,
-    color: PALETTE.onSurfaceVariant,
     fontSize: 13,
     textDecorationLine: 'underline',
   },
   featuresCard: {
     marginTop: 22,
     width: '100%',
-    backgroundColor: PALETTE.surfaceAlt,
     borderRadius: RADIUS.lg,
     borderCurve: 'continuous',
     paddingHorizontal: 18,
@@ -694,99 +783,24 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: RADIUS.full,
-    backgroundColor: PALETTE.surfaceRaised,
     justifyContent: 'center',
     alignItems: 'center',
   },
   featureText: {
     ...TYPOGRAPHY.bodyMd,
     lineHeight: 19,
-    color: PALETTE.onSurface,
     flex: 1,
   },
   hairline: {
     height: 1,
-    backgroundColor: PALETTE.border,
   },
   attributionFooter: {
     marginTop: 24,
-  },
-  // Manual modal
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(14, 15, 12, 0.55)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: SPACING.gutter,
-  },
-  manualModalCard: {
-    width: '100%',
-    backgroundColor: PALETTE.surface,
-    borderRadius: RADIUS.lg,
-    borderCurve: 'continuous',
-    padding: 22,
-  },
-  manualModalTitle: {
-    fontFamily: FONT_FAMILY.displayBold,
-    fontSize: 20,
-    lineHeight: 24,
-    letterSpacing: -0.4,
-    color: PALETTE.onSurface,
-    marginTop: 6,
-    marginBottom: 8,
-  },
-  manualModalDesc: {
-    ...TYPOGRAPHY.bodyMd,
-    lineHeight: 20,
-    color: PALETTE.onSurfaceVariant,
-    marginBottom: 16,
-  },
-  manualInput: {
-    backgroundColor: PALETTE.surfaceAlt,
-    borderRadius: RADIUS.md,
-    borderCurve: 'continuous',
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontFamily: FONT_FAMILY.bodyRegular,
-    fontSize: 13,
-    color: PALETTE.onSurface,
-    marginBottom: 18,
-  },
-  manualModalActions: {
-    flexDirection: 'row',
-    gap: 10,
-  },
-  cancelBtn: {
-    flex: 1,
-    minHeight: 46,
-    borderRadius: RADIUS.full,
-    backgroundColor: PALETTE.surfaceAlt,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  cancelBtnText: {
-    fontFamily: FONT_FAMILY.displaySemiBold,
-    fontSize: 14,
-    color: PALETTE.onSurface,
-  },
-  submitBtn: {
-    flex: 1,
-    minHeight: 46,
-    borderRadius: RADIUS.full,
-    backgroundColor: PALETTE.surfaceInverse,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  submitBtnText: {
-    fontFamily: FONT_FAMILY.displaySemiBold,
-    fontSize: 14,
-    color: PALETTE.surface,
   },
   // Authenticated
   freeNoticeBox: {
     marginHorizontal: SPACING.gutter,
     marginBottom: SPACING.md,
-    backgroundColor: PALETTE.surfaceAlt,
     borderRadius: RADIUS.md,
     borderCurve: 'continuous',
     padding: 14,
@@ -797,13 +811,11 @@ const styles = StyleSheet.create({
   freeNoticeText: {
     ...TYPOGRAPHY.bodySm,
     lineHeight: 18,
-    color: PALETTE.onSurfaceVariant,
     flex: 1,
   },
   deviceCard: {
     marginHorizontal: SPACING.gutter,
     marginBottom: SPACING.sectionGap,
-    backgroundColor: PALETTE.surfaceAlt,
     borderRadius: RADIUS.lg,
     borderCurve: 'continuous',
     padding: SPACING.cardPadding,
@@ -820,7 +832,6 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   switchDeviceBtn: {
-    backgroundColor: PALETTE.surfaceRaised,
     paddingHorizontal: 14,
     paddingVertical: 7,
     borderRadius: RADIUS.full,
@@ -828,7 +839,6 @@ const styles = StyleSheet.create({
   switchDeviceBtnText: {
     fontFamily: FONT_FAMILY.displaySemiBold,
     fontSize: 12,
-    color: PALETTE.onSurface,
   },
   deviceNameRow: {
     flexDirection: 'row',
@@ -842,13 +852,11 @@ const styles = StyleSheet.create({
   },
   activeDeviceName: {
     ...TYPOGRAPHY.headlineMd,
-    color: PALETTE.onSurface,
     flex: 1,
   },
   activeDeviceDesc: {
     ...TYPOGRAPHY.bodySm,
     lineHeight: 17,
-    color: PALETTE.onSurfaceVariant,
     marginTop: 4,
   },
   wakeUpBtn: {
@@ -857,7 +865,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 6,
     marginTop: 14,
-    backgroundColor: PALETTE.surfaceInverse,
     paddingVertical: 11,
     paddingHorizontal: 16,
     borderRadius: RADIUS.full,
@@ -866,13 +873,11 @@ const styles = StyleSheet.create({
   wakeUpBtnText: {
     fontFamily: FONT_FAMILY.displaySemiBold,
     fontSize: 12,
-    color: PALETTE.surface,
   },
   // Now Playing Dark Ink Card
   nowPlayingCard: {
     marginHorizontal: SPACING.gutter,
     marginBottom: SPACING.sectionGap,
-    backgroundColor: PALETTE.surfaceInverse,
     borderRadius: RADIUS.lg,
     borderCurve: 'continuous',
     padding: 22,
@@ -887,7 +892,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    backgroundColor: '#1B1C18',
     borderRadius: RADIUS.md,
     paddingHorizontal: 12,
     paddingVertical: 10,
@@ -896,7 +900,6 @@ const styles = StyleSheet.create({
   playerErrorText: {
     ...TYPOGRAPHY.bodySm,
     lineHeight: 17,
-    color: PALETTE.onInverse,
     flex: 1,
   },
   playerMain: {
@@ -910,7 +913,6 @@ const styles = StyleSheet.create({
     marginBottom: 18,
   },
   nowPlayingArtPlaceholder: {
-    backgroundColor: '#1B1C18',
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -919,13 +921,11 @@ const styles = StyleSheet.create({
     fontSize: 20,
     lineHeight: 24,
     letterSpacing: -0.4,
-    color: PALETTE.onInverse,
     textAlign: 'center',
     marginBottom: 4,
   },
   nowPlayingTrackArtist: {
     ...TYPOGRAPHY.bodyMd,
-    color: PALETTE.onInverseMuted,
     textAlign: 'center',
     marginBottom: 22,
   },
@@ -939,7 +939,6 @@ const styles = StyleSheet.create({
     width: 48,
     height: 48,
     borderRadius: RADIUS.full,
-    backgroundColor: '#1B1C18',
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -947,7 +946,6 @@ const styles = StyleSheet.create({
     width: 68,
     height: 68,
     borderRadius: RADIUS.full,
-    backgroundColor: PALETTE.primary,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -959,19 +957,16 @@ const styles = StyleSheet.create({
     width: 68,
     height: 68,
     borderRadius: RADIUS.md,
-    backgroundColor: '#1B1C18',
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 14,
   },
   idlePlayerText: {
     ...TYPOGRAPHY.headlineMd,
-    color: PALETTE.onInverse,
     textAlign: 'center',
   },
   idlePlayerSub: {
     ...TYPOGRAPHY.bodyMd,
-    color: PALETTE.onInverseMuted,
     textAlign: 'center',
     marginTop: 6,
   },
@@ -980,7 +975,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 6,
     marginTop: 16,
-    backgroundColor: PALETTE.primary,
     paddingHorizontal: 18,
     paddingVertical: 11,
     borderRadius: RADIUS.full,
@@ -988,7 +982,6 @@ const styles = StyleSheet.create({
   wakeUpInverseBtnText: {
     fontFamily: FONT_FAMILY.displaySemiBold,
     fontSize: 12,
-    color: PALETTE.onPrimary,
   },
   // Playlists Section
   sectionHeader: {
@@ -1003,7 +996,6 @@ const styles = StyleSheet.create({
     fontSize: 20,
     lineHeight: 24,
     letterSpacing: -0.4,
-    color: PALETTE.onSurface,
     marginTop: 4,
   },
   playlistCarousel: {
@@ -1012,7 +1004,6 @@ const styles = StyleSheet.create({
   },
   playlistCard: {
     width: 152,
-    backgroundColor: PALETTE.surfaceRaised,
     borderRadius: RADIUS.lg,
     borderCurve: 'continuous',
     padding: 12,
@@ -1025,7 +1016,6 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   playlistImagePlaceholder: {
-    backgroundColor: PALETTE.surfaceAlt,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -1033,24 +1023,20 @@ const styles = StyleSheet.create({
     fontFamily: FONT_FAMILY.displaySemiBold,
     fontSize: 14,
     lineHeight: 18,
-    color: PALETTE.onSurface,
   },
   playlistTrackCount: {
     fontFamily: FONT_FAMILY.bodyMedium,
     fontSize: 12,
     fontVariant: ['tabular-nums'],
-    color: PALETTE.onSurfaceVariant,
     marginTop: 3,
   },
   emptyPlaylists: {
     marginHorizontal: SPACING.gutter,
-    backgroundColor: PALETTE.surfaceAlt,
     borderRadius: RADIUS.lg,
     padding: 24,
     alignItems: 'center',
   },
   emptyPlaylistsText: {
     ...TYPOGRAPHY.bodyMd,
-    color: PALETTE.onSurfaceVariant,
   },
 });

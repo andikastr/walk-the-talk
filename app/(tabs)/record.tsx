@@ -1,16 +1,14 @@
 import React, { useState } from 'react';
 import {
-  StyleSheet,
-  View,
-  Text,
+  Linking,
   Pressable,
-  Alert,
-  Modal,
-  TextInput,
   ScrollView,
+  StyleSheet,
+  Text,
+  View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { List, Map, Music } from 'lucide-react-native';
+import { AlertTriangle, List, Map } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import { useWorkoutSession } from '@/hooks/useWorkoutSession';
 import { useSpotifyPlayer } from '@/hooks/useSpotifyPlayer';
@@ -19,12 +17,17 @@ import { WorkoutControls } from '@/components/workout/WorkoutControls';
 import { WorkoutMap } from '@/components/map/WorkoutMap';
 import { SplitsTable } from '@/components/workout/SplitsTable';
 import { RunnerMiniPlayer } from '@/components/spotify/RunnerMiniPlayer';
+import { SaveWorkoutModal } from '@/components/workout/SaveWorkoutModal';
 import { WorkoutType } from '@/types/workout';
-import { FONT_FAMILY, PALETTE, RADIUS, SPACING, TYPOGRAPHY } from '@/constants/Colors';
-import { formatDuration, formatPace, formatSteps } from '@/services/location/metrics';
+import { RADIUS, SPACING, TYPOGRAPHY } from '@/constants/Colors';
+import { getActivityLabel } from '@/constants/i18n';
+import { usePreferences } from '@/context/AppPreferencesContext';
+import { useAppDialog } from '@/context/AppDialogContext';
 
 export default function RecordScreen() {
   const router = useRouter();
+  const { palette, isDark, t } = usePreferences();
+  const { confirm } = useAppDialog();
   const {
     status,
     workoutType,
@@ -38,6 +41,8 @@ export default function RecordScreen() {
     routeCoordinates,
     splits,
     currentLocation,
+    hasLocationPermission,
+    refreshLocationPermission,
     startWorkout,
     pauseWorkout,
     resumeWorkout,
@@ -53,42 +58,56 @@ export default function RecordScreen() {
   const [saveModalVisible, setSaveModalVisible] = useState(false);
   const [workoutTitle, setWorkoutTitle] = useState('');
 
-  const handleStart = () => {
+  const showPermissionGuidance = async () => {
+    const shouldOpenSettings = await confirm({
+      kicker: t.record.permissionKicker,
+      title: t.record.permissionTitle,
+      message: t.record.permissionMessage,
+      cancelText: t.common.later,
+      confirmText: t.common.openSettings,
+    });
+    if (shouldOpenSettings) {
+      await Linking.openSettings();
+    }
+  };
+
+  const handleStart = async () => {
+    if (hasLocationPermission !== true) {
+      const granted = await refreshLocationPermission(true);
+      if (!granted) {
+        await showPermissionGuidance();
+        return;
+      }
+    }
     startWorkout(selectedType);
   };
 
-  const handleStop = () => {
-    Alert.alert(
-      'Selesaikan Olahraga?',
-      'Apakah Anda ingin mengakhiri dan menyimpan sesi lari ini?',
-      [
-        { text: 'Batal', style: 'cancel' },
-        {
-          text: 'Selesai',
-          style: 'default',
-          onPress: () => {
-            stopWorkout();
-            const now = new Date();
-            const timeGreeting =
-              now.getHours() < 11
-                ? 'Pagi'
-                : now.getHours() < 15
-                ? 'Siang'
-                : now.getHours() < 18
-                ? 'Sore'
-                : 'Malam';
-            const typeLabel =
-              selectedType === 'walk'
-                ? 'Jalan'
-                : selectedType === 'jog'
-                ? 'Jogging'
-                : 'Lari';
-            setWorkoutTitle(`${typeLabel} ${timeGreeting}`);
-            setSaveModalVisible(true);
-          },
-        },
-      ]
-    );
+  const handleStop = async () => {
+    const isShortSession = distanceMeters < 10 && durationSeconds < 10;
+    const confirmed = await confirm({
+      kicker: isShortSession ? t.common.warningKicker : t.common.confirmKicker,
+      title: t.record.stopTitle,
+      message: isShortSession ? t.record.stopShortMessage : t.record.stopMessage,
+      cancelText: t.common.cancel,
+      confirmText: t.record.stopAction,
+    });
+
+    if (!confirmed) return;
+
+    stopWorkout();
+    const now = new Date();
+    const hour = now.getHours();
+    const timeGreeting =
+      hour < 11
+        ? t.timeOfDay.morning
+        : hour < 15
+        ? t.timeOfDay.afternoon
+        : hour < 18
+        ? t.timeOfDay.evening
+        : t.timeOfDay.night;
+    const typeLabel = getActivityLabel(workoutType || selectedType, t);
+    setWorkoutTitle(`${typeLabel} ${timeGreeting}`);
+    setSaveModalVisible(true);
   };
 
   const handleConfirmSave = async () => {
@@ -105,53 +124,55 @@ export default function RecordScreen() {
   };
 
   const handleDiscard = () => {
-    Alert.alert('Buang Aktivitas?', 'Data sesi lari ini tidak akan disimpan.', [
-      { text: 'Batal', style: 'cancel' },
-      {
-        text: 'Buang',
-        style: 'destructive',
-        onPress: () => {
-          setSaveModalVisible(false);
-          resetWorkout();
-        },
-      },
-    ]);
+    setSaveModalVisible(false);
+    resetWorkout();
   };
 
   const isRecordingOrPaused = status === 'recording' || status === 'paused';
+  const displayedType = isRecordingOrPaused ? workoutType : selectedType;
   const activeTypeLabel =
-    (isRecordingOrPaused ? workoutType : selectedType) === 'walk'
-      ? 'Jalan Kaki'
-      : (isRecordingOrPaused ? workoutType : selectedType) === 'jog'
-      ? 'Jogging'
-      : 'Lari';
+    displayedType === 'walk'
+      ? t.activityTypes.walkFull
+      : getActivityLabel(displayedType, t);
+  const darkSurfaceBorder = isDark ? { borderWidth: 1, borderColor: palette.border } : undefined;
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeAreaView
+      style={[styles.container, { backgroundColor: palette.surface }]}
+      edges={['top']}
+    >
       {/* Editorial Top Header */}
       <View style={styles.topBar}>
         <View style={styles.topBarLeft}>
           <View style={styles.statusKickerRow}>
-            {status === 'recording' && <View style={styles.recordingDot} />}
-            <Text style={styles.topBarKicker}>
+            {status === 'recording' && (
+              <View style={[styles.recordingDot, { backgroundColor: palette.accent }]} />
+            )}
+            <Text style={[styles.topBarKicker, { color: palette.onSurfaceVariant }]}>
               {status === 'recording'
-                ? 'SEDANG MEREKAM · GPS'
+                ? t.record.recordingKicker
                 : status === 'paused'
-                ? 'SESI DIJEDA'
-                : 'MODE LATIHAN'}
+                ? t.record.pausedKicker
+                : t.record.idleKicker}
             </Text>
           </View>
-          <Text style={styles.topBarTitle}>{activeTypeLabel}</Text>
+          <Text style={[styles.topBarTitle, { color: palette.onSurface }]}>
+            {activeTypeLabel}
+          </Text>
         </View>
 
         {isRecordingOrPaused && (
           <View style={styles.modeToggleRow}>
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="Tampilkan peta"
+              accessibilityLabel={t.record.mapChipA11y}
               style={({ pressed }) => [
                 styles.modeChip,
-                viewMode === 'map' && styles.modeChipActive,
+                {
+                  backgroundColor:
+                    viewMode === 'map' ? palette.actionPrimary : palette.surfaceAlt,
+                },
+                viewMode !== 'map' && darkSurfaceBorder,
                 pressed && { opacity: 0.78 },
               ]}
               onPress={() => setViewMode('map')}
@@ -159,24 +180,35 @@ export default function RecordScreen() {
               <Map
                 size={15}
                 strokeWidth={2}
-                color={viewMode === 'map' ? PALETTE.onInverse : PALETTE.onSurfaceVariant}
+                color={
+                  viewMode === 'map' ? palette.onActionPrimary : palette.onSurfaceVariant
+                }
               />
               <Text
                 style={[
                   styles.modeChipText,
-                  viewMode === 'map' && styles.modeChipTextActive,
+                  {
+                    color:
+                      viewMode === 'map'
+                        ? palette.onActionPrimary
+                        : palette.onSurfaceVariant,
+                  },
                 ]}
               >
-                Peta
+                {t.record.mapChip}
               </Text>
             </Pressable>
 
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="Tampilkan splits"
+              accessibilityLabel={t.record.splitsChipA11y}
               style={({ pressed }) => [
                 styles.modeChip,
-                viewMode === 'splits' && styles.modeChipActive,
+                {
+                  backgroundColor:
+                    viewMode === 'splits' ? palette.actionPrimary : palette.surfaceAlt,
+                },
+                viewMode !== 'splits' && darkSurfaceBorder,
                 pressed && { opacity: 0.78 },
               ]}
               onPress={() => setViewMode('splits')}
@@ -184,25 +216,56 @@ export default function RecordScreen() {
               <List
                 size={15}
                 strokeWidth={2}
-                color={viewMode === 'splits' ? PALETTE.onInverse : PALETTE.onSurfaceVariant}
+                color={
+                  viewMode === 'splits' ? palette.onActionPrimary : palette.onSurfaceVariant
+                }
               />
               <Text
                 style={[
                   styles.modeChipText,
-                  viewMode === 'splits' && styles.modeChipTextActive,
+                  {
+                    color:
+                      viewMode === 'splits'
+                        ? palette.onActionPrimary
+                        : palette.onSurfaceVariant,
+                  },
                 ]}
               >
-                Splits
+                {t.record.splitsChip}
               </Text>
             </Pressable>
           </View>
         )}
       </View>
 
+      {hasLocationPermission === false && (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={t.record.permissionTitle}
+          onPress={() => void showPermissionGuidance()}
+          style={({ pressed }) => [
+            styles.permissionBanner,
+            { backgroundColor: palette.emberTint },
+            pressed && { opacity: 0.8 },
+          ]}
+        >
+          <AlertTriangle size={15} strokeWidth={2} color={palette.accent} />
+          <Text style={[styles.permissionBannerText, { color: palette.accent }]} numberOfLines={1}>
+            {t.record.permissionBannerText}
+          </Text>
+        </Pressable>
+      )}
+
       {/* Center Map / Splits Frame */}
       <View style={styles.centerArea}>
         {viewMode === 'map' ? (
-          <View style={styles.mapFrame}>
+          <View
+            style={[
+              styles.mapFrame,
+              { backgroundColor: palette.surfaceAlt },
+              darkSurfaceBorder,
+            ]}
+          >
             <WorkoutMap
               currentLocation={currentLocation}
               routeCoordinates={routeCoordinates}
@@ -211,8 +274,12 @@ export default function RecordScreen() {
           </View>
         ) : (
           <ScrollView style={styles.splitsScroll} showsVerticalScrollIndicator={false}>
-            <Text style={styles.splitsKicker}>SPLITS PER KILOMETER</Text>
-            <Text style={styles.splitsHeading}>Catatan Pecahan Waktu</Text>
+            <Text style={[styles.splitsKicker, { color: palette.onSurfaceVariant }]}>
+              {t.record.splitsKicker}
+            </Text>
+            <Text style={[styles.splitsHeading, { color: palette.onSurface }]}>
+              {t.record.splitsHeading}
+            </Text>
             <SplitsTable splits={splits} />
           </ScrollView>
         )}
@@ -236,78 +303,26 @@ export default function RecordScreen() {
           status={status}
           selectedType={selectedType}
           onSelectType={setSelectedType}
-          onStart={handleStart}
+          onStart={() => void handleStart()}
           onPause={pauseWorkout}
           onResume={resumeWorkout}
-          onStop={handleStop}
+          onStop={() => void handleStop()}
         />
       </View>
 
-      {/* Save Workout Bottom Sheet Modal */}
-      <Modal visible={saveModalVisible} animationType="slide" transparent>
-        <View style={styles.modalBackdrop}>
-          <View style={styles.saveModalContent}>
-            <Text style={styles.modalKicker}>SESI SELESAI</Text>
-            <Text style={styles.saveModalHeading}>Simpan Aktivitas</Text>
-            <Text style={styles.saveModalSub}>Beri judul untuk sesi latihan Anda:</Text>
-
-            <TextInput
-              style={styles.titleInput}
-              value={workoutTitle}
-              onChangeText={setWorkoutTitle}
-              placeholder="Contoh: Lari Pagi di GBK"
-              placeholderTextColor={PALETTE.onSurfaceVariant}
-            />
-
-            <View style={styles.summaryStatsBox}>
-              <View style={styles.summaryStat}>
-                <Text style={styles.summaryStatLabel}>JARAK</Text>
-                <Text style={styles.summaryStatEmber}>
-                  {(distanceMeters / 1000).toFixed(2)} km
-                </Text>
-              </View>
-              <View style={styles.summaryStat}>
-                <Text style={styles.summaryStatLabel}>DURASI</Text>
-                <Text style={styles.summaryStatVal}>{formatDuration(durationSeconds)}</Text>
-              </View>
-              <View style={styles.summaryStat}>
-                <Text style={styles.summaryStatLabel}>AVG PACE</Text>
-                <Text style={styles.summaryStatVal}>{formatPace(avgPaceSeconds)}</Text>
-              </View>
-              <View style={styles.summaryStat}>
-                <Text style={styles.summaryStatLabel}>LANGKAH</Text>
-                <Text style={styles.summaryStatVal}>{formatSteps(steps)}</Text>
-              </View>
-            </View>
-
-            {currentTrack && (
-              <View style={styles.soundtrackPreview}>
-                <Music size={16} strokeWidth={2} color={PALETTE.spotifyGreen} />
-                <Text style={styles.soundtrackPreviewText} numberOfLines={1}>
-                  Soundtrack: {currentTrack.name} · {currentTrack.artists?.[0]?.name}
-                </Text>
-              </View>
-            )}
-
-            <View style={styles.modalActions}>
-              <Pressable
-                accessibilityRole="button"
-                style={({ pressed }) => [styles.discardBtn, pressed && { opacity: 0.78 }]}
-                onPress={handleDiscard}
-              >
-                <Text style={styles.discardBtnText}>Buang</Text>
-              </Pressable>
-              <Pressable
-                accessibilityRole="button"
-                style={({ pressed }) => [styles.saveBtn, pressed && { opacity: 0.85 }]}
-                onPress={handleConfirmSave}
-              >
-                <Text style={styles.saveBtnText}>Simpan Aktivitas</Text>
-              </Pressable>
-            </View>
-          </View>
-        </View>
-      </Modal>
+      <SaveWorkoutModal
+        visible={saveModalVisible}
+        workoutTitle={workoutTitle}
+        onChangeTitle={setWorkoutTitle}
+        distanceMeters={distanceMeters}
+        durationSeconds={durationSeconds}
+        avgPaceSeconds={avgPaceSeconds}
+        steps={steps}
+        soundtrackTrackName={currentTrack?.name}
+        soundtrackArtistName={currentTrack?.artists?.[0]?.name}
+        onSave={handleConfirmSave}
+        onDiscard={handleDiscard}
+      />
     </SafeAreaView>
   );
 }
@@ -315,7 +330,6 @@ export default function RecordScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: PALETTE.surface,
   },
   topBar: {
     flexDirection: 'row',
@@ -338,15 +352,12 @@ const styles = StyleSheet.create({
     width: 6,
     height: 6,
     borderRadius: RADIUS.full,
-    backgroundColor: PALETTE.accent,
   },
   topBarKicker: {
     ...TYPOGRAPHY.labelUppercase,
-    color: PALETTE.onSurfaceVariant,
   },
   topBarTitle: {
     ...TYPOGRAPHY.headlineMd,
-    color: PALETTE.onSurface,
   },
   modeToggleRow: {
     flexDirection: 'row',
@@ -359,17 +370,23 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     paddingHorizontal: 12,
     borderRadius: RADIUS.full,
-    backgroundColor: PALETTE.surfaceAlt,
-  },
-  modeChipActive: {
-    backgroundColor: PALETTE.surfaceInverse,
   },
   modeChipText: {
     ...TYPOGRAPHY.labelSm,
-    color: PALETTE.onSurfaceVariant,
   },
-  modeChipTextActive: {
-    color: PALETTE.onInverse,
+  permissionBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: SPACING.gutter,
+    marginBottom: SPACING.sm,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+    borderRadius: RADIUS.md,
+  },
+  permissionBannerText: {
+    ...TYPOGRAPHY.labelSm,
+    flex: 1,
   },
   centerArea: {
     flex: 1,
@@ -380,19 +397,16 @@ const styles = StyleSheet.create({
     borderRadius: RADIUS.lg,
     borderCurve: 'continuous',
     overflow: 'hidden',
-    backgroundColor: PALETTE.surfaceAlt,
   },
   splitsScroll: {
     flex: 1,
   },
   splitsKicker: {
     ...TYPOGRAPHY.labelUppercase,
-    color: PALETTE.onSurfaceVariant,
     marginBottom: 4,
   },
   splitsHeading: {
     ...TYPOGRAPHY.headlineSm,
-    color: PALETTE.onSurface,
     marginBottom: SPACING.md,
   },
   bottomStack: {
@@ -400,118 +414,5 @@ const styles = StyleSheet.create({
     paddingTop: SPACING.md,
     paddingBottom: 94,
     gap: 10,
-  },
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(14, 15, 12, 0.55)',
-    justifyContent: 'flex-end',
-  },
-  saveModalContent: {
-    backgroundColor: PALETTE.surface,
-    borderTopLeftRadius: RADIUS.lg,
-    borderTopRightRadius: RADIUS.lg,
-    padding: SPACING.gutter,
-    paddingBottom: SPACING.xxxl,
-  },
-  modalKicker: {
-    ...TYPOGRAPHY.labelUppercase,
-    color: PALETTE.onSurfaceVariant,
-    marginBottom: 4,
-  },
-  saveModalHeading: {
-    ...TYPOGRAPHY.displayMd,
-    fontSize: 28,
-    color: PALETTE.onSurface,
-  },
-  saveModalSub: {
-    ...TYPOGRAPHY.bodyMd,
-    color: PALETTE.onSurfaceVariant,
-    marginTop: 4,
-    marginBottom: SPACING.lg,
-  },
-  titleInput: {
-    backgroundColor: PALETTE.surfaceAlt,
-    borderRadius: RADIUS.md,
-    borderCurve: 'continuous',
-    paddingHorizontal: SPACING.lg,
-    paddingVertical: 14,
-    fontFamily: FONT_FAMILY.displaySemiBold,
-    color: PALETTE.onSurface,
-    fontSize: 16,
-    marginBottom: SPACING.lg,
-  },
-  summaryStatsBox: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    rowGap: SPACING.md,
-    backgroundColor: PALETTE.surfaceAlt,
-    borderRadius: RADIUS.lg,
-    borderCurve: 'continuous',
-    padding: SPACING.cardPadding,
-    marginBottom: SPACING.md,
-  },
-  summaryStat: {
-    alignItems: 'center',
-    width: '50%',
-  },
-  summaryStatLabel: {
-    ...TYPOGRAPHY.caption,
-    color: PALETTE.onSurfaceVariant,
-    marginBottom: 4,
-  },
-  summaryStatEmber: {
-    ...TYPOGRAPHY.numeralSm,
-    fontSize: 18,
-    color: PALETTE.accent,
-  },
-  summaryStatVal: {
-    ...TYPOGRAPHY.numeralSm,
-    fontSize: 18,
-    color: PALETTE.onSurface,
-  },
-  soundtrackPreview: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: SPACING.sm,
-    backgroundColor: PALETTE.surfaceInverse,
-    padding: SPACING.md,
-    borderRadius: RADIUS.md,
-    borderCurve: 'continuous',
-    marginBottom: SPACING.xl,
-  },
-  soundtrackPreviewText: {
-    ...TYPOGRAPHY.bodySm,
-    color: PALETTE.onInverse,
-    flex: 1,
-  },
-  modalActions: {
-    flexDirection: 'row',
-    gap: SPACING.md,
-  },
-  discardBtn: {
-    flex: 1,
-    backgroundColor: PALETTE.surfaceAlt,
-    height: 48,
-    borderRadius: RADIUS.full,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  discardBtnText: {
-    ...TYPOGRAPHY.labelMd,
-    fontFamily: FONT_FAMILY.bodySemiBold,
-    color: PALETTE.onSurface,
-  },
-  saveBtn: {
-    flex: 2,
-    backgroundColor: PALETTE.surfaceInverse,
-    height: 48,
-    borderRadius: RADIUS.full,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  saveBtnText: {
-    ...TYPOGRAPHY.labelMd,
-    fontFamily: FONT_FAMILY.bodySemiBold,
-    color: PALETTE.onInverse,
   },
 });

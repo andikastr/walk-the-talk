@@ -6,15 +6,17 @@ import {
   FlatList,
   Pressable,
   RefreshControl,
-  Alert,
 } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { Calendar, Play } from 'lucide-react-native';
 import { getAllWorkouts, deleteWorkout, getWorkoutStats } from '@/services/database/workout-repo';
 import { WorkoutRecord, WorkoutStats, WorkoutType } from '@/types/workout';
-import { PALETTE, RADIUS, SPACING, TYPOGRAPHY } from '@/constants/Colors';
+import { RADIUS, SPACING, TYPOGRAPHY } from '@/constants/Colors';
+import { getActivityLabel } from '@/constants/i18n';
 import { formatSteps } from '@/services/location/metrics';
 import { useSpotifyAuth } from '@/hooks/useSpotifyAuth';
+import { usePreferences } from '@/context/AppPreferencesContext';
+import { useAppDialog } from '@/context/AppDialogContext';
 import {
   ActivityRowCard,
   IconCircleButton,
@@ -27,6 +29,8 @@ type FilterType = 'all' | WorkoutType;
 export default function HistoryScreen() {
   const router = useRouter();
   const { user } = useSpotifyAuth();
+  const { palette, isDark, t } = usePreferences();
+  const { confirm } = useAppDialog();
   const [workouts, setWorkouts] = useState<Omit<WorkoutRecord, 'routePoints' | 'splits'>[]>([]);
   const [stats, setStats] = useState<WorkoutStats | null>(null);
   const [filter, setFilter] = useState<FilterType>('all');
@@ -54,18 +58,19 @@ export default function HistoryScreen() {
     setRefreshing(false);
   };
 
-  const handleDelete = (id: string, title: string) => {
-    Alert.alert('Hapus Aktivitas', `Apakah Anda yakin ingin menghapus "${title}"?`, [
-      { text: 'Batal', style: 'cancel' },
-      {
-        text: 'Hapus',
-        style: 'destructive',
-        onPress: async () => {
-          await deleteWorkout(id);
-          await loadWorkouts();
-        },
-      },
-    ]);
+  const handleDelete = async (id: string, title: string) => {
+    const confirmed = await confirm({
+      kicker: t.common.warningKicker,
+      title: t.history.deleteTitle,
+      message: t.history.deleteMessage(title),
+      cancelText: t.common.cancel,
+      confirmText: t.history.deleteAction,
+      destructive: true,
+    });
+    if (confirmed) {
+      await deleteWorkout(id);
+      await loadWorkouts();
+    }
   };
 
   const filteredWorkouts = useMemo(() => {
@@ -74,37 +79,51 @@ export default function HistoryScreen() {
   }, [workouts, filter]);
 
   const filterChips: { key: FilterType; label: string }[] = [
-    { key: 'all', label: 'Semua' },
-    { key: 'run', label: 'Lari' },
-    { key: 'jog', label: 'Jogging' },
-    { key: 'walk', label: 'Jalan' },
+    { key: 'all', label: t.common.all },
+    { key: 'run', label: getActivityLabel('run', t) },
+    { key: 'jog', label: getActivityLabel('jog', t) },
+    { key: 'walk', label: getActivityLabel('walk', t) },
   ];
+
+  const darkSurfaceBorder = isDark ? { borderWidth: 1, borderColor: palette.border } : undefined;
 
   const renderHeader = () => (
     <View style={styles.listHeader}>
       {/* Overview 2x2 Data Strip */}
       {stats && (
-        <View style={styles.statsBanner}>
+        <View
+          style={[
+            styles.statsBanner,
+            { backgroundColor: palette.surfaceAlt },
+            darkSurfaceBorder,
+          ]}
+        >
           <View style={styles.statsCol}>
-            <KickerText style={styles.statsLbl}>KM TOTAL</KickerText>
-            <Text style={styles.statsNumEmber}>
+            <KickerText style={styles.statsLbl}>{t.history.totalKmLabel}</KickerText>
+            <Text style={[styles.statsNumEmber, { color: palette.accent }]}>
               {(stats.totalDistanceMeters / 1000).toFixed(1)}
             </Text>
           </View>
 
           <View style={styles.statsCol}>
-            <KickerText style={styles.statsLbl}>AKTIVITAS</KickerText>
-            <Text style={styles.statsNum}>{stats.totalWorkouts}</Text>
+            <KickerText style={styles.statsLbl}>{t.history.activitiesLabel}</KickerText>
+            <Text style={[styles.statsNum, { color: palette.onSurface }]}>
+              {stats.totalWorkouts}
+            </Text>
           </View>
 
           <View style={styles.statsCol}>
-            <KickerText style={styles.statsLbl}>TOTAL LANGKAH</KickerText>
-            <Text style={styles.statsNum}>{formatSteps(stats.totalSteps)}</Text>
+            <KickerText style={styles.statsLbl}>{t.history.totalStepsLabel}</KickerText>
+            <Text style={[styles.statsNum, { color: palette.onSurface }]}>
+              {formatSteps(stats.totalSteps)}
+            </Text>
           </View>
 
           <View style={styles.statsCol}>
-            <KickerText style={styles.statsLbl}>KCAL</KickerText>
-            <Text style={styles.statsNum}>{stats.totalCaloriesKcal}</Text>
+            <KickerText style={styles.statsLbl}>{t.history.kcalLabel}</KickerText>
+            <Text style={[styles.statsNum, { color: palette.onSurface }]}>
+              {stats.totalCaloriesKcal}
+            </Text>
           </View>
         </View>
       )}
@@ -121,11 +140,21 @@ export default function HistoryScreen() {
               onPress={() => setFilter(chip.key)}
               style={({ pressed }) => [
                 styles.chip,
-                isActive && styles.chipActive,
+                {
+                  backgroundColor: isActive ? palette.actionPrimary : palette.surfaceAlt,
+                },
+                !isActive && darkSurfaceBorder,
                 pressed && { opacity: 0.78 },
               ]}
             >
-              <Text style={[styles.chipText, isActive && styles.chipTextActive]}>
+              <Text
+                style={[
+                  styles.chipText,
+                  {
+                    color: isActive ? palette.onActionPrimary : palette.onSurfaceVariant,
+                  },
+                ]}
+              >
                 {chip.label}
               </Text>
             </Pressable>
@@ -136,15 +165,15 @@ export default function HistoryScreen() {
   );
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: palette.surface }]}>
       <TopAppBar
-        kicker="LOG LATIHAN"
-        title="Riwayat Aktivitas"
+        kicker={t.history.kicker}
+        title={t.history.title}
         avatarUrl={user?.images?.[0]?.url}
         rightActions={
           <IconCircleButton
-            accessibilityLabel="Mulai aktivitas baru"
-            icon={<Play size={18} strokeWidth={2} color={PALETTE.onSurface} />}
+            accessibilityLabel={t.history.startNewA11y}
+            icon={<Play size={18} strokeWidth={2} color={palette.onSurface} />}
             onPress={() => router.push('/record' as any)}
           />
         }
@@ -160,17 +189,23 @@ export default function HistoryScreen() {
           <RefreshControl
             refreshing={refreshing}
             onRefresh={onRefresh}
-            tintColor={PALETTE.accent}
+            tintColor={palette.accent}
           />
         }
         ListEmptyComponent={
-          <View style={styles.emptyContainer}>
-            <Calendar size={36} strokeWidth={2} color={PALETTE.onSurfaceVariant} />
-            <Text style={styles.emptyTitle}>
-              {filter === 'all' ? 'Belum ada riwayat aktivitas' : 'Belum ada sesi untuk filter ini'}
+          <View
+            style={[
+              styles.emptyContainer,
+              { backgroundColor: palette.surfaceAlt },
+              darkSurfaceBorder,
+            ]}
+          >
+            <Calendar size={36} strokeWidth={2} color={palette.onSurfaceVariant} />
+            <Text style={[styles.emptyTitle, { color: palette.onSurface }]}>
+              {filter === 'all' ? t.history.emptyAllTitle : t.history.emptyFilteredTitle}
             </Text>
-            <Text style={styles.emptySubtitle}>
-              Selesaikan sesi jalan, jogging, atau lari untuk melihat catatan latihan di sini.
+            <Text style={[styles.emptySubtitle, { color: palette.onSurfaceVariant }]}>
+              {t.history.emptySubtitle}
             </Text>
           </View>
         }
@@ -179,7 +214,7 @@ export default function HistoryScreen() {
             workout={item}
             dateFormat="full"
             onPress={() => router.push(`/workout/${item.id}` as any)}
-            onDelete={() => handleDelete(item.id, item.title)}
+            onDelete={() => void handleDelete(item.id, item.title)}
           />
         )}
       />
@@ -190,7 +225,6 @@ export default function HistoryScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: PALETTE.surface,
   },
   listHeader: {
     marginBottom: SPACING.md,
@@ -199,7 +233,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     rowGap: SPACING.md,
-    backgroundColor: PALETTE.surfaceAlt,
     padding: SPACING.cardPadding,
     borderRadius: RADIUS.lg,
     borderCurve: 'continuous',
@@ -214,11 +247,9 @@ const styles = StyleSheet.create({
   },
   statsNum: {
     ...TYPOGRAPHY.numeralMd,
-    color: PALETTE.onSurface,
   },
   statsNumEmber: {
     ...TYPOGRAPHY.numeralMd,
-    color: PALETTE.accent,
   },
   chipRow: {
     flexDirection: 'row',
@@ -227,27 +258,18 @@ const styles = StyleSheet.create({
     marginBottom: SPACING.sm,
   },
   chip: {
-    backgroundColor: PALETTE.surfaceAlt,
     borderRadius: RADIUS.full,
     paddingHorizontal: 12,
     paddingVertical: 6,
   },
-  chipActive: {
-    backgroundColor: PALETTE.surfaceInverse,
-  },
   chipText: {
     ...TYPOGRAPHY.labelSm,
-    color: PALETTE.onSurfaceVariant,
-  },
-  chipTextActive: {
-    color: PALETTE.onInverse,
   },
   listContent: {
     paddingHorizontal: SPACING.gutter,
     paddingBottom: 112,
   },
   emptyContainer: {
-    backgroundColor: PALETTE.surfaceAlt,
     borderRadius: RADIUS.lg,
     borderCurve: 'continuous',
     alignItems: 'center',
@@ -256,13 +278,11 @@ const styles = StyleSheet.create({
   },
   emptyTitle: {
     ...TYPOGRAPHY.headlineSm,
-    color: PALETTE.onSurface,
     marginTop: SPACING.md,
     textAlign: 'center',
   },
   emptySubtitle: {
     ...TYPOGRAPHY.bodySm,
-    color: PALETTE.onSurfaceVariant,
     textAlign: 'center',
     marginTop: 6,
   },

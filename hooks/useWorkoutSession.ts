@@ -60,15 +60,47 @@ export function useWorkoutSession() {
   const distanceAtLastStepEventRef = useRef<number>(0);
   const sensorReceivedEventRef = useRef<boolean>(false);
 
-  // Pantau status foreground/background untuk mode hybrid pedometer
+  const refreshLocationPermission = useCallback(
+    async (requestIfUndetermined: boolean = false): Promise<boolean> => {
+      try {
+        let perm = await Location.getForegroundPermissionsAsync();
+        if (perm.status !== 'granted' && requestIfUndetermined) {
+          perm = await Location.requestForegroundPermissionsAsync();
+        }
+        const granted = perm.status === 'granted';
+        setHasLocationPermission(granted);
+
+        if (granted) {
+          try {
+            const initialLoc = await Location.getCurrentPositionAsync({
+              accuracy: Location.Accuracy.Balanced,
+            });
+            setCurrentLocation(initialLoc.coords);
+          } catch {
+            // Lokasi GPS mungkin belum tersedia saat pertama kali aktif
+          }
+        }
+        return granted;
+      } catch {
+        setHasLocationPermission(false);
+        return false;
+      }
+    },
+    []
+  );
+
+  // Pantau status foreground/background untuk mode hybrid pedometer & refresh izin GPS
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextState) => {
       appStateRef.current = nextState;
+      if (nextState === 'active') {
+        void refreshLocationPermission(false);
+      }
     });
     return () => {
       subscription.remove();
     };
-  }, []);
+  }, [refreshLocationPermission]);
 
   // Pastikan listener dibersihkan jika hook unmount
   useEffect(() => {
@@ -80,18 +112,17 @@ export function useWorkoutSession() {
 
   // Minta izin lokasi saat mount
   useEffect(() => {
-    (async () => {
-      const { status: fgStatus } = await Location.requestForegroundPermissionsAsync();
-      setHasLocationPermission(fgStatus === 'granted');
-
-      if (fgStatus === 'granted') {
-        const initialLoc = await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.Balanced,
-        });
-        setCurrentLocation(initialLoc.coords);
+    let active = true;
+    void Promise.resolve().then(() => {
+      if (active) {
+        return refreshLocationPermission(true);
       }
-    })();
-  }, []);
+      return false;
+    });
+    return () => {
+      active = false;
+    };
+  }, [refreshLocationPermission]);
 
   // Timer interval saat recording
   useEffect(() => {
@@ -217,6 +248,12 @@ export function useWorkoutSession() {
   const startLocationWatching = useCallback(async () => {
     if (locationSubRef.current) {
       locationSubRef.current.remove();
+    }
+
+    const perm = await Location.getForegroundPermissionsAsync();
+    if (perm.status !== 'granted') {
+      setHasLocationPermission(false);
+      return;
     }
 
     locationSubRef.current = await Location.watchPositionAsync(
@@ -426,6 +463,7 @@ export function useWorkoutSession() {
     splits,
     currentLocation,
     hasLocationPermission,
+    refreshLocationPermission,
     startWorkout,
     pauseWorkout,
     resumeWorkout,

@@ -1,7 +1,8 @@
 import React from 'react';
 import { StyleSheet, View, Text } from 'react-native';
 import { formatDuration, formatPace, formatSteps } from '@/services/location/metrics';
-import { FONT_FAMILY, PALETTE, RADIUS, SPACING, TYPOGRAPHY } from '@/constants/Colors';
+import { FONT_FAMILY, RADIUS, SPACING, TYPOGRAPHY } from '@/constants/Colors';
+import { usePreferences } from '@/context/AppPreferencesContext';
 
 interface LiveStatsHUDProps {
   durationSeconds: number;
@@ -14,7 +15,7 @@ interface LiveStatsHUDProps {
 }
 
 /**
- * High-contrast editorial HUD pada warm paper-alt (#EBE8E0) dengan angka hero Ember
+ * High-contrast editorial HUD dengan angka hero Ember
  * dan angka sekunder Space Grotesk tabular-nums sesuai DESIGN.md.
  */
 export function LiveStatsHUD({
@@ -25,63 +26,100 @@ export function LiveStatsHUD({
   steps = 0,
   cadenceSpm = 0,
 }: LiveStatsHUDProps) {
+  const { palette, isDark, t } = usePreferences();
   const distanceKm = (distanceMeters / 1000).toFixed(2);
 
   return (
-    <View style={styles.container}>
+    <View
+      style={[
+        styles.container,
+        { backgroundColor: palette.surfaceAlt },
+        isDark && { borderWidth: 1, borderColor: palette.border },
+      ]}
+    >
       <View style={styles.heroRow}>
         <View>
-          <Text style={styles.kicker}>JARAK TEMPUH</Text>
+          <Text style={[styles.kicker, { color: palette.onSurfaceVariant }]}>
+            {t.hud.distanceKicker}
+          </Text>
           <View style={styles.heroValueRow}>
-            <Text style={styles.primaryValue} numberOfLines={1} adjustsFontSizeToFit>
+            <Text
+              style={[styles.primaryValue, { color: palette.accent }]}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+            >
               {distanceKm}
             </Text>
-            <Text style={styles.primaryUnit}>KM</Text>
+            <Text style={[styles.primaryUnit, { color: palette.onSurfaceVariant }]}>
+              {t.common.kmUnit.toUpperCase()}
+            </Text>
           </View>
         </View>
       </View>
 
-      <View style={styles.divider} />
+      <View style={[styles.divider, { backgroundColor: palette.border }]} />
 
       <View style={styles.metricsRow}>
         <View style={styles.metricItem}>
-          <Text style={styles.metricLabel}>WAKTU</Text>
-          <Text style={styles.metricValue}>{formatDuration(durationSeconds)}</Text>
+          <Text style={[styles.metricLabel, { color: palette.onSurfaceVariant }]}>
+            {t.hud.time}
+          </Text>
+          <Text style={[styles.metricValue, { color: palette.onSurface }]}>
+            {formatDuration(durationSeconds)}
+          </Text>
         </View>
 
-        <View style={styles.vertDivider} />
+        <View style={[styles.vertDivider, { backgroundColor: palette.border }]} />
 
         <View style={styles.metricItem}>
-          <Text style={styles.metricLabel}>AVG PACE</Text>
-          <Text style={styles.metricValue}>{formatPace(avgPaceSeconds)}</Text>
+          <Text style={[styles.metricLabel, { color: palette.onSurfaceVariant }]}>
+            {t.hud.avgPace}
+          </Text>
+          <Text style={[styles.metricValue, { color: palette.onSurface }]}>
+            {formatPace(avgPaceSeconds)}
+          </Text>
         </View>
 
-        <View style={styles.vertDivider} />
+        <View style={[styles.vertDivider, { backgroundColor: palette.border }]} />
 
         <View style={styles.metricItem}>
-          <Text style={styles.metricLabel}>KALORI</Text>
-          <Text style={styles.metricValue}>
+          <Text style={[styles.metricLabel, { color: palette.onSurfaceVariant }]}>
+            {t.hud.calories}
+          </Text>
+          <Text style={[styles.metricValue, { color: palette.onSurface }]}>
             {caloriesKcal}
-            <Text style={styles.subUnit}> kcal</Text>
+            <Text style={[styles.subUnit, { color: palette.onSurfaceVariant }]}>
+              {' '}
+              {t.common.kcalUnit}
+            </Text>
           </Text>
         </View>
       </View>
 
-      <View style={styles.divider} />
+      <View style={[styles.divider, { backgroundColor: palette.border }]} />
 
       <View style={styles.metricsRow}>
         <View style={styles.metricItem}>
-          <Text style={styles.metricLabel}>LANGKAH</Text>
-          <Text style={styles.metricValue}>{formatSteps(steps)}</Text>
+          <Text style={[styles.metricLabel, { color: palette.onSurfaceVariant }]}>
+            {t.hud.steps}
+          </Text>
+          <Text style={[styles.metricValue, { color: palette.onSurface }]}>
+            {formatSteps(steps)}
+          </Text>
         </View>
 
-        <View style={styles.vertDivider} />
+        <View style={[styles.vertDivider, { backgroundColor: palette.border }]} />
 
         <View style={styles.metricItem}>
-          <Text style={styles.metricLabel}>KADENS</Text>
-          <Text style={styles.metricValue}>
+          <Text style={[styles.metricLabel, { color: palette.onSurfaceVariant }]}>
+            {t.hud.cadence}
+          </Text>
+          <Text style={[styles.metricValue, { color: palette.onSurface }]}>
             {cadenceSpm}
-            <Text style={styles.subUnit}> spm</Text>
+            <Text style={[styles.subUnit, { color: palette.onSurfaceVariant }]}>
+              {' '}
+              {t.common.spmUnit}
+            </Text>
           </Text>
         </View>
       </View>
@@ -91,7 +129,6 @@ export function LiveStatsHUD({
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: PALETTE.surfaceAlt,
     borderRadius: RADIUS.lg,
     borderCurve: 'continuous',
     padding: SPACING.cardPadding,
@@ -103,7 +140,6 @@ const styles = StyleSheet.create({
   },
   kicker: {
     ...TYPOGRAPHY.labelUppercase,
-    color: PALETTE.onSurfaceVariant,
     marginBottom: SPACING.xs,
   },
   heroValueRow: {
@@ -116,16 +152,13 @@ const styles = StyleSheet.create({
     fontSize: 52,
     lineHeight: 54,
     letterSpacing: -2.08,
-    color: PALETTE.accent,
     fontVariant: ['tabular-nums'],
   },
   primaryUnit: {
     ...TYPOGRAPHY.headlineSm,
-    color: PALETTE.onSurfaceVariant,
   },
   divider: {
     height: 1,
-    backgroundColor: PALETTE.border,
     marginVertical: SPACING.sm,
   },
   metricsRow: {
@@ -139,21 +172,17 @@ const styles = StyleSheet.create({
   vertDivider: {
     width: 1,
     height: 28,
-    backgroundColor: PALETTE.border,
     marginHorizontal: SPACING.sm,
   },
   metricLabel: {
     ...TYPOGRAPHY.caption,
-    color: PALETTE.onSurfaceVariant,
     marginBottom: 4,
   },
   metricValue: {
     ...TYPOGRAPHY.numeralSm,
     fontSize: 19,
-    color: PALETTE.onSurface,
   },
   subUnit: {
     ...TYPOGRAPHY.bodySm,
-    color: PALETTE.onSurfaceVariant,
   },
 });

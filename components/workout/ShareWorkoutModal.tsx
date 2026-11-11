@@ -6,17 +6,26 @@ import {
   Pressable,
   StyleSheet,
   ActivityIndicator,
-  Alert,
   ScrollView,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ViewShot, { ViewShotRef } from 'react-native-view-shot';
 import * as Sharing from 'expo-sharing';
-import { Share2, Music, Layers, Sparkles } from 'lucide-react-native';
+import { Share2, Music, Layers, Sparkles, X } from 'lucide-react-native';
 import { WorkoutRecord } from '@/types/workout';
 import { formatDuration, formatPace, formatSteps } from '@/services/location/metrics';
 import { RouteSilhouette } from '@/components/workout/RouteSilhouette';
 import { IconCircleButton } from '@/components/ui/EditorialPrimitives';
-import { PALETTE, RADIUS, SPACING, TYPOGRAPHY, FONT_FAMILY } from '@/constants/Colors';
+import { AppDialogOverlay, AppDialogTone } from '@/components/ui/AppDialogOverlay';
+import {
+  LIGHT_PALETTE,
+  RADIUS,
+  SPACING,
+  TYPOGRAPHY,
+  FONT_FAMILY,
+} from '@/constants/Colors';
+import { getActivityLabel } from '@/constants/i18n';
+import { usePreferences } from '@/context/AppPreferencesContext';
 
 type SharePreset = 'paper' | 'dark' | 'sticker';
 
@@ -26,42 +35,63 @@ interface ShareWorkoutModalProps {
   onClose: () => void;
 }
 
+interface InlineFeedbackState {
+  visible: boolean;
+  tone: AppDialogTone;
+  title: string;
+  message: string;
+}
+
 const CARD_WIDTH = 316;
 const ROUTE_WIDTH = 276;
 const ROUTE_HEIGHT = 148;
-
-const PRESETS: { key: SharePreset; label: string }[] = [
-  { key: 'paper', label: 'Paper' },
-  { key: 'dark', label: 'Dark Ink' },
-  { key: 'sticker', label: 'Sticker PNG' },
-];
 
 export function ShareWorkoutModal({
   visible,
   workout,
   onClose,
 }: ShareWorkoutModalProps) {
+  const { palette, isDark: isAppDark, locale, t } = usePreferences();
+  const insets = useSafeAreaInsets();
   const viewShotRef = useRef<ViewShotRef | null>(null);
   const [preset, setPreset] = useState<SharePreset>('paper');
   const [isSharing, setIsSharing] = useState(false);
+  const [feedback, setFeedback] = useState<InlineFeedbackState>({
+    visible: false,
+    tone: 'error',
+    title: '',
+    message: '',
+  });
 
-  const isDark = preset === 'dark';
+  const presets: { key: SharePreset; label: string }[] = [
+    { key: 'paper', label: t.shareModal.presets.paper },
+    { key: 'dark', label: t.shareModal.presets.dark },
+    { key: 'sticker', label: t.shareModal.presets.sticker },
+  ];
+
+  // Export card uses fixed editorial presets so Paper PNG is always warm paper and Dark PNG is always ink.
+  const isCardDark = preset === 'dark';
   const isSticker = preset === 'sticker';
 
-  const textPrimary = isDark || isSticker ? PALETTE.onInverse : PALETTE.onSurface;
-  const textSecondary = isDark || isSticker ? PALETTE.onInverseMuted : PALETTE.onSurfaceVariant;
-  const accentHero = isDark || isSticker ? PALETTE.primary : PALETTE.accent;
-  const hairlineColor = isDark
+  const cardTextPrimary =
+    isCardDark || isSticker ? LIGHT_PALETTE.onInverse : LIGHT_PALETTE.onSurface;
+  const cardTextSecondary =
+    isCardDark || isSticker ? LIGHT_PALETTE.onInverseMuted : LIGHT_PALETTE.onSurfaceVariant;
+  const accentHero =
+    isCardDark || isSticker ? LIGHT_PALETTE.primary : LIGHT_PALETTE.accent;
+  const hairlineColor = isCardDark
     ? 'rgba(244, 242, 236, 0.14)'
     : isSticker
       ? 'rgba(244, 242, 236, 0.25)'
-      : PALETTE.border;
-  const routeStroke = isDark ? PALETTE.primary : PALETTE.accent;
-  const routeStart = PALETTE.surfaceInverse;
-  const routeEnd = isDark ? PALETTE.accent : PALETTE.primary;
+      : LIGHT_PALETTE.border;
+  const routeStroke = isCardDark ? LIGHT_PALETTE.primary : LIGHT_PALETTE.accent;
+  const routeStart = LIGHT_PALETTE.surfaceInverse;
+  const routeEnd = isCardDark ? LIGHT_PALETTE.accent : LIGHT_PALETTE.primary;
+
+  const typeLabel = getActivityLabel(workout.type, t, true);
 
   const dateLabel = new Date(workout.startTime)
-    .toLocaleDateString('id-ID', {
+    .toLocaleDateString(locale, {
       day: '2-digit',
       month: 'short',
       year: 'numeric',
@@ -75,28 +105,37 @@ export function ShareWorkoutModal({
     try {
       const canShare = await Sharing.isAvailableAsync();
       if (!canShare) {
-        Alert.alert(
-          'Tidak Didukung',
-          'Fitur berbagi file belum didukung di perangkat ini.'
-        );
+        setFeedback({
+          visible: true,
+          tone: 'error',
+          title: t.shareModal.unsupportedTitle,
+          message: t.shareModal.unsupportedMessage,
+        });
         return;
       }
 
       const uri = await viewShotRef.current?.capture?.();
       if (!uri) {
-        Alert.alert('Gagal Membuat Kartu', 'Tidak dapat merender gambar aktivitas.');
+        setFeedback({
+          visible: true,
+          tone: 'error',
+          title: t.shareModal.captureFailTitle,
+          message: t.shareModal.captureFailMessage,
+        });
         return;
       }
 
       await Sharing.shareAsync(uri, {
         mimeType: 'image/png',
-        dialogTitle: 'Bagikan Aktivitas',
+        dialogTitle: t.shareModal.shareDialogTitle,
       });
     } catch {
-      Alert.alert(
-        'Gagal Membagikan',
-        'Terjadi kesalahan saat mengekspor kartu aktivitas.'
-      );
+      setFeedback({
+        visible: true,
+        tone: 'error',
+        title: t.shareModal.shareFailTitle,
+        message: t.shareModal.shareFailMessage,
+      });
     } finally {
       setIsSharing(false);
     }
@@ -107,49 +146,73 @@ export function ShareWorkoutModal({
       visible={visible}
       animationType="slide"
       transparent
+      statusBarTranslucent
       onRequestClose={onClose}
     >
-      <View style={styles.overlay}>
-        <View style={styles.sheet}>
+      <View style={[styles.overlay, { backgroundColor: palette.backdrop }]}>
+        <View
+          style={[
+            styles.sheet,
+            {
+              backgroundColor: palette.modalSurface,
+              paddingBottom: Math.max(insets.bottom, 20) + 12,
+            },
+            isAppDark && { borderTopWidth: 1, borderColor: palette.border },
+          ]}
+        >
           <View style={styles.sheetHeader}>
             <View>
-              <Text style={styles.kicker}>SOCIAL EXPORT · PNG</Text>
-              <Text style={styles.sheetTitle}>Bagikan Aktivitas</Text>
+              <Text style={[styles.kicker, { color: palette.onSurfaceVariant }]}>
+                {t.shareModal.kicker}
+              </Text>
+              <Text style={[styles.sheetTitle, { color: palette.onSurface }]}>
+                {t.shareModal.title}
+              </Text>
             </View>
             <IconCircleButton
-              icon="close"
+              icon={<X size={18} strokeWidth={2} color={palette.onSurface} />}
               onPress={onClose}
-              accessibilityLabel="Tutup jendela bagikan"
+              accessibilityLabel={t.shareModal.closeA11y}
             />
           </View>
 
           <View style={styles.presetRow}>
-            {PRESETS.map((item) => {
+            {presets.map((item) => {
               const active = preset === item.key;
               return (
                 <Pressable
                   key={item.key}
                   accessibilityRole="button"
                   onPress={() => setPreset(item.key)}
-                  style={[styles.presetChip, active && styles.presetChipActive]}
+                  style={[
+                    styles.presetChip,
+                    {
+                      backgroundColor: active
+                        ? palette.actionPrimary
+                        : palette.modalSurfaceAlt,
+                    },
+                    !active && isAppDark && { borderWidth: 1, borderColor: palette.border },
+                  ]}
                 >
                   {item.key === 'sticker' ? (
                     <Sparkles
                       size={13}
-                      color={active ? PALETTE.onInverse : PALETTE.onSurfaceVariant}
+                      color={active ? palette.onActionPrimary : palette.onSurfaceVariant}
                       strokeWidth={2}
                     />
                   ) : (
                     <Layers
                       size={13}
-                      color={active ? PALETTE.onInverse : PALETTE.onSurfaceVariant}
+                      color={active ? palette.onActionPrimary : palette.onSurfaceVariant}
                       strokeWidth={2}
                     />
                   )}
                   <Text
                     style={[
                       styles.presetText,
-                      active && styles.presetTextActive,
+                      {
+                        color: active ? palette.onActionPrimary : palette.onSurfaceVariant,
+                      },
                     ]}
                   >
                     {item.label}
@@ -188,30 +251,32 @@ export function ShareWorkoutModal({
                     <View
                       style={[
                         styles.typeBadge,
-                        isDark || isSticker ? styles.typeBadgeLight : styles.typeBadgeDark,
+                        isCardDark || isSticker ? styles.typeBadgeLight : styles.typeBadgeDark,
                       ]}
                     >
                       <Text
                         style={[
                           styles.typeBadgeText,
-                          isDark || isSticker ? styles.typeBadgeTextDark : styles.typeBadgeTextLight,
+                          isCardDark || isSticker
+                            ? styles.typeBadgeTextDark
+                            : styles.typeBadgeTextLight,
                         ]}
                       >
-                        {workout.type.toUpperCase()}
+                        {typeLabel}
                       </Text>
                     </View>
-                    <Text style={[styles.brandMark, { color: textSecondary }]}>
+                    <Text style={[styles.brandMark, { color: cardTextSecondary }]}>
                       WALK THE TALK
                     </Text>
                   </View>
 
                   <Text
                     numberOfLines={2}
-                    style={[styles.workoutTitle, { color: textPrimary }]}
+                    style={[styles.workoutTitle, { color: cardTextPrimary }]}
                   >
                     {workout.title}
                   </Text>
-                  <Text style={[styles.dateText, { color: textSecondary }]}>
+                  <Text style={[styles.dateText, { color: cardTextSecondary }]}>
                     {dateLabel}
                   </Text>
 
@@ -231,7 +296,7 @@ export function ShareWorkoutModal({
                       strokeWidth={4}
                       startDotColor={routeStart}
                       endDotColor={routeEnd}
-                      fallbackColor={textSecondary}
+                      fallbackColor={cardTextSecondary}
                     />
                   </View>
 
@@ -239,8 +304,8 @@ export function ShareWorkoutModal({
                     <Text style={[styles.heroDistanceVal, { color: accentHero }]}>
                       {(workout.distanceMeters / 1000).toFixed(2)}
                     </Text>
-                    <Text style={[styles.heroDistanceUnit, { color: textSecondary }]}>
-                      KM
+                    <Text style={[styles.heroDistanceUnit, { color: cardTextSecondary }]}>
+                      {t.common.kmUnit.toUpperCase()}
                     </Text>
                   </View>
 
@@ -250,40 +315,40 @@ export function ShareWorkoutModal({
 
                   <View style={styles.metricsGrid}>
                     <View style={styles.metricCell}>
-                      <Text style={[styles.metricLabel, { color: textSecondary }]}>
-                        WAKTU
+                      <Text style={[styles.metricLabel, { color: cardTextSecondary }]}>
+                        {t.shareModal.time}
                       </Text>
-                      <Text style={[styles.metricVal, { color: textPrimary }]}>
+                      <Text style={[styles.metricVal, { color: cardTextPrimary }]}>
                         {formatDuration(workout.durationSeconds)}
                       </Text>
                     </View>
                     <View style={styles.metricCell}>
-                      <Text style={[styles.metricLabel, { color: textSecondary }]}>
-                        AVG PACE
+                      <Text style={[styles.metricLabel, { color: cardTextSecondary }]}>
+                        {t.shareModal.avgPace}
                       </Text>
-                      <Text style={[styles.metricVal, { color: textPrimary }]}>
+                      <Text style={[styles.metricVal, { color: cardTextPrimary }]}>
                         {formatPace(workout.avgPaceSecondsPerKm)}{' '}
-                        <Text style={[styles.metricUnit, { color: textSecondary }]}>
+                        <Text style={[styles.metricUnit, { color: cardTextSecondary }]}>
                           /km
                         </Text>
                       </Text>
                     </View>
                     <View style={styles.metricCell}>
-                      <Text style={[styles.metricLabel, { color: textSecondary }]}>
-                        LANGKAH
+                      <Text style={[styles.metricLabel, { color: cardTextSecondary }]}>
+                        {t.shareModal.steps}
                       </Text>
-                      <Text style={[styles.metricVal, { color: textPrimary }]}>
+                      <Text style={[styles.metricVal, { color: cardTextPrimary }]}>
                         {formatSteps(workout.steps ?? 0)}
                       </Text>
                     </View>
                     <View style={styles.metricCell}>
-                      <Text style={[styles.metricLabel, { color: textSecondary }]}>
-                        KALORI
+                      <Text style={[styles.metricLabel, { color: cardTextSecondary }]}>
+                        {t.shareModal.calories}
                       </Text>
-                      <Text style={[styles.metricVal, { color: textPrimary }]}>
+                      <Text style={[styles.metricVal, { color: cardTextPrimary }]}>
                         {workout.caloriesKcal}{' '}
-                        <Text style={[styles.metricUnit, { color: textSecondary }]}>
-                          kcal
+                        <Text style={[styles.metricUnit, { color: cardTextSecondary }]}>
+                          {t.common.kcalUnit}
                         </Text>
                       </Text>
                     </View>
@@ -303,7 +368,7 @@ export function ShareWorkoutModal({
                       />
                       <Text
                         numberOfLines={1}
-                        style={[styles.musicFooterText, { color: textSecondary }]}
+                        style={[styles.musicFooterText, { color: cardTextSecondary }]}
                       >
                         {workout.soundtrackTrackName} — {workout.soundtrackArtist}
                       </Text>
@@ -314,8 +379,8 @@ export function ShareWorkoutModal({
             </View>
 
             {isSticker ? (
-              <Text style={styles.stickerHint}>
-                Diekspor sebagai PNG transparan — siap ditempel di IG Story atau TikTok.
+              <Text style={[styles.stickerHint, { color: palette.onSurfaceVariant }]}>
+                {t.shareModal.stickerHint}
               </Text>
             ) : null}
           </ScrollView>
@@ -326,20 +391,38 @@ export function ShareWorkoutModal({
             onPress={handleCaptureAndShare}
             style={({ pressed }) => [
               styles.shareCta,
-              pressed && { opacity: 0.88 },
+              { backgroundColor: palette.primary },
+              pressed && { backgroundColor: palette.primaryDeep },
               isSharing && { opacity: 0.7 },
             ]}
           >
             {isSharing ? (
-              <ActivityIndicator size="small" color={PALETTE.onPrimary} />
+              <ActivityIndicator size="small" color={palette.onPrimary} />
             ) : (
-              <Share2 size={18} color={PALETTE.onPrimary} strokeWidth={2.2} />
+              <Share2 size={18} color={palette.onPrimary} strokeWidth={2.2} />
             )}
-            <Text style={styles.shareCtaText}>
-              {isSharing ? 'Menyiapkan PNG...' : 'Bagikan Sekarang'}
+            <Text style={[styles.shareCtaText, { color: palette.onPrimary }]}>
+              {isSharing ? t.shareModal.preparingPng : t.shareModal.shareNow}
             </Text>
           </Pressable>
         </View>
+
+        <AppDialogOverlay
+          inline
+          visible={feedback.visible}
+          tone={feedback.tone}
+          title={feedback.title}
+          message={feedback.message}
+          onDismiss={() => setFeedback((prev) => ({ ...prev, visible: false }))}
+          actions={[
+            {
+              id: 'ok',
+              label: t.common.ok,
+              variant: 'primary',
+              onPress: () => setFeedback((prev) => ({ ...prev, visible: false })),
+            },
+          ]}
+        />
       </View>
     </Modal>
   );
@@ -348,17 +431,14 @@ export function ShareWorkoutModal({
 const styles = StyleSheet.create({
   overlay: {
     flex: 1,
-    backgroundColor: 'rgba(17, 19, 16, 0.56)',
     justifyContent: 'flex-end',
   },
   sheet: {
-    backgroundColor: PALETTE.surface,
     borderTopLeftRadius: RADIUS.lg,
     borderTopRightRadius: RADIUS.lg,
     borderCurve: 'continuous',
     paddingHorizontal: SPACING.gutter,
     paddingTop: SPACING.lg,
-    paddingBottom: 32,
     maxHeight: '92%',
   },
   sheetHeader: {
@@ -369,11 +449,9 @@ const styles = StyleSheet.create({
   },
   kicker: {
     ...TYPOGRAPHY.labelUppercase,
-    color: PALETTE.onSurfaceVariant,
   },
   sheetTitle: {
     ...TYPOGRAPHY.headlineMd,
-    color: PALETTE.onSurface,
     marginTop: 2,
   },
   presetRow: {
@@ -388,17 +466,9 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     paddingHorizontal: 14,
     borderRadius: RADIUS.full,
-    backgroundColor: PALETTE.surfaceAlt,
-  },
-  presetChipActive: {
-    backgroundColor: PALETTE.surfaceInverse,
   },
   presetText: {
     ...TYPOGRAPHY.labelSm,
-    color: PALETTE.onSurfaceVariant,
-  },
-  presetTextActive: {
-    color: PALETTE.onInverse,
   },
   previewScroll: {
     alignItems: 'center',
@@ -424,12 +494,12 @@ const styles = StyleSheet.create({
     padding: SPACING.cardPadding,
   },
   cardPaper: {
-    backgroundColor: PALETTE.surface,
+    backgroundColor: LIGHT_PALETTE.surface,
     borderWidth: 1,
-    borderColor: PALETTE.border,
+    borderColor: LIGHT_PALETTE.border,
   },
   cardDark: {
-    backgroundColor: PALETTE.surfaceInverse,
+    backgroundColor: LIGHT_PALETTE.surfaceInverse,
   },
   cardSticker: {
     backgroundColor: 'transparent',
@@ -446,19 +516,19 @@ const styles = StyleSheet.create({
     borderRadius: RADIUS.full,
   },
   typeBadgeDark: {
-    backgroundColor: PALETTE.surfaceInverse,
+    backgroundColor: LIGHT_PALETTE.surfaceInverse,
   },
   typeBadgeLight: {
-    backgroundColor: PALETTE.surface,
+    backgroundColor: LIGHT_PALETTE.surface,
   },
   typeBadgeText: {
     ...TYPOGRAPHY.caption,
   },
   typeBadgeTextLight: {
-    color: PALETTE.onInverse,
+    color: LIGHT_PALETTE.onInverse,
   },
   typeBadgeTextDark: {
-    color: PALETTE.onSurface,
+    color: LIGHT_PALETTE.onSurface,
   },
   brandMark: {
     ...TYPOGRAPHY.caption,
@@ -483,7 +553,7 @@ const styles = StyleSheet.create({
     marginBottom: SPACING.md,
   },
   routeStagePaper: {
-    backgroundColor: PALETTE.surfaceAlt,
+    backgroundColor: LIGHT_PALETTE.surfaceAlt,
   },
   routeStageDark: {
     backgroundColor: 'rgba(244, 242, 236, 0.05)',
@@ -544,7 +614,6 @@ const styles = StyleSheet.create({
   },
   stickerHint: {
     ...TYPOGRAPHY.bodySm,
-    color: PALETTE.onSurfaceVariant,
     textAlign: 'center',
     marginTop: SPACING.sm,
     paddingHorizontal: SPACING.md,
@@ -552,7 +621,6 @@ const styles = StyleSheet.create({
   shareCta: {
     height: 52,
     borderRadius: RADIUS.full,
-    backgroundColor: PALETTE.primary,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -561,6 +629,5 @@ const styles = StyleSheet.create({
   shareCtaText: {
     ...TYPOGRAPHY.labelMd,
     fontFamily: FONT_FAMILY.displaySemiBold,
-    color: PALETTE.onPrimary,
   },
 });

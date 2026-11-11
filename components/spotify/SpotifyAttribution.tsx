@@ -1,7 +1,8 @@
 import React from 'react';
 import { StyleSheet, View, Text } from 'react-native';
 import { FontAwesome } from '@expo/vector-icons';
-import { PALETTE, TYPOGRAPHY } from '@/constants/Colors';
+import { TYPOGRAPHY } from '@/constants/Colors';
+import { usePreferences } from '@/context/AppPreferencesContext';
 
 interface SpotifyAttributionProps {
   size?: 'small' | 'medium';
@@ -12,16 +13,17 @@ export function SpotifyAttribution({
   size = 'small',
   variant = 'dark',
 }: SpotifyAttributionProps) {
+  const { palette } = usePreferences();
   const isSmall = size === 'small';
   const textColor =
-    variant === 'dark' ? PALETTE.onInverseMuted : PALETTE.onSurfaceVariant;
+    variant === 'dark' ? palette.onFeatureMuted : palette.onSurfaceVariant;
 
   return (
     <View style={styles.container}>
       <FontAwesome
         name="spotify"
         size={isSmall ? 14 : 18}
-        color={PALETTE.spotifyGreen}
+        color={palette.spotifyGreen}
       />
       <Text
         style={[

@@ -4,6 +4,7 @@ import * as WebBrowser from 'expo-web-browser';
 import * as Linking from 'expo-linking';
 import { getDefaultReturnUrl } from 'expo-auth-session';
 import { SPOTIFY_CONFIG } from '@/constants/Config';
+import { getActiveLanguage, getTranslations } from '@/constants/i18n';
 import { SpotifyTokenResponse } from '@/types/spotify';
 
 // Pastikan WebBrowser dapat menyelesaikan sesi autentikasi
@@ -43,8 +44,10 @@ async function generateCodeChallenge(verifier: string): Promise<string> {
  * Memulai alur autentikasi PKCE dengan Spotify
  */
 export async function loginWithSpotify(): Promise<boolean> {
+  const errors = getTranslations(getActiveLanguage()).spotifyErrors;
+
   if (!SPOTIFY_CONFIG.clientId) {
-    throw new Error('Spotify Client ID belum diatur. Silakan isi EXPO_PUBLIC_SPOTIFY_CLIENT_ID di .env');
+    throw new Error(errors.missingClientId);
   }
 
   const verifier = generateCodeVerifier(64);
@@ -101,7 +104,7 @@ export async function loginWithSpotify(): Promise<boolean> {
   }
 
   if (!code) {
-    throw new Error('Tidak ada authorization code yang diterima dari Spotify.');
+    throw new Error(errors.noAuthCode);
   }
 
   // Tukarkan code dengan access token menggunakan code_verifier
@@ -117,6 +120,8 @@ async function exchangeCodeForToken(
   verifier: string,
   redirectUri: string = SPOTIFY_CONFIG.redirectUri
 ): Promise<SpotifyTokenResponse> {
+  const errors = getTranslations(getActiveLanguage()).spotifyErrors;
+
   const body = new URLSearchParams({
     client_id: SPOTIFY_CONFIG.clientId,
     grant_type: 'authorization_code',
@@ -140,16 +145,16 @@ async function exchangeCodeForToken(
       const errJson = JSON.parse(errText);
       const desc = (errJson.error_description || errJson.error || '').toLowerCase();
       if (desc.includes('code_verifier') || desc.includes('code verifier')) {
-        detail = 'Kode verifier PKCE tidak cocok dengan sesi aktif. Hal ini terjadi jika Anda menekan tombol "Masuk dengan Spotify" lebih dari sekali sehingga link yang disalin berasal dari sesi sebelumnya. Silakan tekan tombol "Masuk dengan Spotify" sekali lagi dan salin link yang paling baru.';
+        detail = errors.verifierMismatch;
       } else if (desc.includes('authorization code')) {
-        detail = 'Kode otorisasi sudah kedaluwarsa atau sudah pernah dipakai sebelumnya (kode Spotify hanya valid 1x). Silakan mulai login baru.';
+        detail = errors.authCodeExpired;
       } else if (desc.includes('redirect_uri')) {
-        detail = `Redirect URI tidak cocok (${redirectUri}). Pastikan konfigurasi redirect URI di Spotify Dashboard dan .env sama persis.`;
+        detail = errors.redirectMismatch(redirectUri);
       } else if (errJson.error_description) {
         detail = `${errJson.error}: ${errJson.error_description}`;
       }
     } catch {}
-    throw new Error(`Gagal menukarkan token (${response.status}):\n${detail}`);
+    throw new Error(errors.tokenExchangeFailed(response.status, detail));
   }
 
   const data: SpotifyTokenResponse = await response.json();
@@ -243,11 +248,11 @@ export async function isSpotifyAuthenticated(): Promise<boolean> {
  * Menyelesaikan otorisasi jika pengguna menyalin link dari tombol 'Return to the app'
  */
 export async function completeAuthWithUrl(urlOrCode: string): Promise<boolean> {
+  const errors = getTranslations(getActiveLanguage()).spotifyErrors;
+
   const verifier = await SecureStore.getItemAsync('spotify_pkce_verifier');
   if (!verifier) {
-    throw new Error(
-      'Sesi verifikasi PKCE tidak ditemukan. Silakan tekan tombol "Masuk dengan Spotify" terlebih dahulu.'
-    );
+    throw new Error(errors.pkceSessionMissing);
   }
 
   const savedRedirectUri = await SecureStore.getItemAsync('spotify_pkce_redirect_uri');
@@ -259,8 +264,12 @@ export async function completeAuthWithUrl(urlOrCode: string): Promise<boolean> {
   if (code.includes('error=')) {
     const matchErr = code.match(/[?&]error=([^&#]+)/);
     const errDesc = code.match(/[?&]error_description=([^&#]+)/);
-    const errText = errDesc ? decodeURIComponent(errDesc[1]) : (matchErr ? decodeURIComponent(matchErr[1]) : 'Akses ditolak');
-    throw new Error(`Spotify membatalkan login: ${errText}`);
+    const errText = errDesc
+      ? decodeURIComponent(errDesc[1])
+      : matchErr
+      ? decodeURIComponent(matchErr[1])
+      : errors.accessDenied;
+    throw new Error(errors.spotifyCanceledLogin(errText));
   }
 
   // Jika berupa URL lengkap
@@ -279,7 +288,7 @@ export async function completeAuthWithUrl(urlOrCode: string): Promise<boolean> {
   code = code.replace(/\/+$/, '').trim();
 
   if (!code) {
-    throw new Error('Tidak dapat menemukan authorization code dari link yang ditempel.');
+    throw new Error(errors.noCodeInLink);
   }
 
   await exchangeCodeForToken(code, verifier, redirectUri);

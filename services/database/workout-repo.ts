@@ -2,12 +2,22 @@ import * as SQLite from 'expo-sqlite';
 import { WorkoutRecord, WorkoutStats, GPSCoordinate } from '@/types/workout';
 
 let dbInstance: SQLite.SQLiteDatabase | null = null;
+let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
 export async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
   if (dbInstance) return dbInstance;
-  dbInstance = await SQLite.openDatabaseAsync('walkthetalk.db');
-  await initDatabase(dbInstance);
-  return dbInstance;
+  if (!dbPromise) {
+    dbPromise = (async () => {
+      const db = await SQLite.openDatabaseAsync('walkthetalk.db');
+      await initDatabase(db);
+      dbInstance = db;
+      return db;
+    })().catch((err) => {
+      dbPromise = null;
+      throw err;
+    });
+  }
+  return dbPromise;
 }
 
 async function initDatabase(db: SQLite.SQLiteDatabase): Promise<void> {
@@ -48,6 +58,11 @@ async function initDatabase(db: SQLite.SQLiteDatabase): Promise<void> {
       duration_seconds INTEGER NOT NULL,
       pace_seconds REAL NOT NULL,
       FOREIGN KEY (workout_id) REFERENCES workouts (id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY NOT NULL,
+      value TEXT NOT NULL
     );
 
     CREATE INDEX IF NOT EXISTS idx_points_workout ON workout_points (workout_id);
@@ -196,5 +211,30 @@ export async function getWorkoutStats(): Promise<WorkoutStats> {
     totalCaloriesKcal: res?.totalCaloriesKcal || 0,
     totalSteps: res?.totalSteps || 0,
   };
+}
+
+/**
+ * Mengambil nilai preferensi aplikasi dari SQLite
+ */
+export async function getAppSetting(key: string): Promise<string | null> {
+  const db = await getDatabase();
+  const row = await db.getFirstAsync<{ value: string }>(
+    `SELECT value FROM app_settings WHERE key = ?;`,
+    [key]
+  );
+  return row?.value ?? null;
+}
+
+/**
+ * Menyimpan atau memperbarui preferensi aplikasi ke SQLite
+ */
+export async function setAppSetting(key: string, value: string): Promise<void> {
+  const db = await getDatabase();
+  await db.runAsync(
+    `INSERT INTO app_settings (key, value)
+     VALUES (?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value;`,
+    [key, value]
+  );
 }
 

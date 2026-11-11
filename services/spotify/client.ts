@@ -1,4 +1,5 @@
 import { SPOTIFY_CONFIG } from '@/constants/Config';
+import { getActiveLanguage, getTranslations } from '@/constants/i18n';
 import { getValidAccessToken, refreshAccessToken, clearTokens } from './auth';
 import { SpotifyApiErrorResponse } from '@/types/spotify';
 
@@ -34,10 +35,11 @@ export async function spotifyFetch<T>(
   options: RequestInit = {},
   retryCount: number = 0
 ): Promise<T> {
+  const errors = getTranslations(getActiveLanguage()).spotifyErrors;
   const token = await getValidAccessToken();
 
   if (!token) {
-    throw new SpotifyApiError(401, 'Pengguna belum terautentikasi dengan Spotify.');
+    throw new SpotifyApiError(401, errors.unauthenticated);
   }
 
   const url = endpoint.startsWith('http') ? endpoint : `${SPOTIFY_CONFIG.apiBaseUrl}${endpoint}`;
@@ -68,7 +70,7 @@ export async function spotifyFetch<T>(
         return spotifyFetch<T>(endpoint, options, retryCount + 1);
       } else {
         await clearTokens();
-        throw new SpotifyApiError(401, 'Sesi Spotify telah berakhir. Silakan login kembali.');
+        throw new SpotifyApiError(401, errors.sessionExpired);
       }
     }
 
@@ -106,12 +108,12 @@ export async function spotifyFetch<T>(
 
       // Berikan konteks edukatif khusus untuk status 403 Forbidden pada kontrol playback
       if (response.status === 403 && endpoint.includes('/player')) {
-        errorMessage = 'Fitur kontrol playback memerlukan akun Spotify Premium atau batasan hak akses akun.';
+        errorMessage = errors.premiumRequired;
       }
 
       // 404 pada endpoint player sering terjadi jika tidak ada Active Device
       if (response.status === 404 && endpoint.includes('/player')) {
-        errorMessage = 'Tidak ada perangkat aktif Spotify. Silakan buka aplikasi Spotify di HP Anda terlebih dahulu.';
+        errorMessage = errors.noDeviceAvailable;
       }
 
       throw new SpotifyApiError(response.status, errorMessage);
@@ -124,7 +126,7 @@ export async function spotifyFetch<T>(
     if (error instanceof SpotifyApiError) {
       throw error;
     }
-    throw new SpotifyApiError(500, (error as Error).message || 'Terjadi kesalahan jaringan.');
+    throw new SpotifyApiError(500, (error as Error).message || errors.networkError);
   }
 }
 

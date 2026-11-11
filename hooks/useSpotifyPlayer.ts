@@ -11,6 +11,7 @@ import {
   transferPlayback,
 } from '@/services/spotify/player';
 import { SpotifyPlaybackState, SpotifyDevice } from '@/types/spotify';
+import { getActiveLanguage, getTranslations } from '@/constants/i18n';
 import { useSpotifyAuth } from '@/hooks/useSpotifyAuth';
 
 export function useSpotifyPlayer() {
@@ -134,10 +135,11 @@ export function useSpotifyPlayer() {
       }
       setTimeout(fetchPlayback, 600);
     } catch (err: any) {
+      const errors = getTranslations(getActiveLanguage()).spotifyErrors;
       if (err.message?.includes('404') || err.message?.includes('NO_ACTIVE_DEVICE')) {
-        setErrorMessage('Tidak ada perangkat aktif. Buka Spotify sekali agar terdeteksi.');
+        setErrorMessage(errors.noActiveDeviceInline);
       } else {
-        setErrorMessage(err.message || 'Gagal mengubah status pemutaran.');
+        setErrorMessage(err.message || errors.togglePlayFailed);
       }
     } finally {
       setIsLoading(false);
@@ -151,7 +153,7 @@ export function useSpotifyPlayer() {
       await nextTrack();
       setTimeout(fetchPlayback, 800);
     } catch (err: any) {
-      setErrorMessage(err.message || 'Gagal melewati lagu.');
+      setErrorMessage(err.message || getTranslations(getActiveLanguage()).spotifyErrors.nextFailed);
     } finally {
       setIsLoading(false);
     }
@@ -164,7 +166,7 @@ export function useSpotifyPlayer() {
       await previousTrack();
       setTimeout(fetchPlayback, 800);
     } catch (err: any) {
-      setErrorMessage(err.message || 'Gagal memutar lagu sebelumnya.');
+      setErrorMessage(err.message || getTranslations(getActiveLanguage()).spotifyErrors.prevFailed);
     } finally {
       setIsLoading(false);
     }
@@ -180,7 +182,9 @@ export function useSpotifyPlayer() {
         fetchDevices();
       }, 1000);
     } catch (err: any) {
-      setErrorMessage(err.message || 'Gagal memindahkan pemutaran ke perangkat yang dipilih.');
+      setErrorMessage(
+        err.message || getTranslations(getActiveLanguage()).spotifyErrors.transferFailed
+      );
     } finally {
       setIsLoading(false);
     }

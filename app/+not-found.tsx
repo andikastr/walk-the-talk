@@ -1,17 +1,29 @@
 import { Link, Stack } from 'expo-router';
 import { StyleSheet, Text, View } from 'react-native';
-import { FONT_FAMILY, PALETTE, RADIUS, SPACING, TYPOGRAPHY } from '@/constants/Colors';
+import { FONT_FAMILY, RADIUS, SPACING, TYPOGRAPHY } from '@/constants/Colors';
+import { usePreferences } from '@/context/AppPreferencesContext';
 
 export default function NotFoundScreen() {
+  const { palette, t } = usePreferences();
+
   return (
     <>
-      <Stack.Screen options={{ title: 'Tidak Ditemukan' }} />
-      <View style={styles.container}>
-        <Text style={styles.kicker}>404 · HALAMAN TIDAK ADA</Text>
-        <Text style={styles.title}>Halaman ini tidak ditemukan.</Text>
+      <Stack.Screen options={{ title: t.routes.notFoundTitle }} />
+      <View style={[styles.container, { backgroundColor: palette.surface }]}>
+        <Text style={[styles.kicker, { color: palette.onSurfaceVariant }]}>
+          {t.routes.notFoundKicker}
+        </Text>
+        <Text style={[styles.title, { color: palette.onSurface }]}>
+          {t.routes.notFoundHeading}
+        </Text>
 
-        <Link href="/" style={styles.linkButton}>
-          <Text style={styles.linkText}>Kembali ke Beranda</Text>
+        <Link
+          href="/"
+          style={[styles.linkButton, { backgroundColor: palette.actionPrimary }]}
+        >
+          <Text style={[styles.linkText, { color: palette.onActionPrimary }]}>
+            {t.routes.notFoundCta}
+          </Text>
         </Link>
       </View>
     </>
@@ -21,24 +33,20 @@ export default function NotFoundScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: PALETTE.surface,
     alignItems: 'center',
     justifyContent: 'center',
     padding: SPACING.gutter,
   },
   kicker: {
     ...TYPOGRAPHY.labelUppercase,
-    color: PALETTE.onSurfaceVariant,
     marginBottom: SPACING.sm,
   },
   title: {
     ...TYPOGRAPHY.headlineMd,
-    color: PALETTE.onSurface,
     textAlign: 'center',
   },
   linkButton: {
     marginTop: SPACING.xl,
-    backgroundColor: PALETTE.surfaceInverse,
     paddingVertical: SPACING.md,
     paddingHorizontal: SPACING.xl,
     borderRadius: RADIUS.full,
@@ -46,6 +54,5 @@ const styles = StyleSheet.create({
   linkText: {
     ...TYPOGRAPHY.labelMd,
     fontFamily: FONT_FAMILY.bodySemiBold,
-    color: PALETTE.onInverse,
   },
 });

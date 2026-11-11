@@ -3,8 +3,9 @@ import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { WebView, WebViewMessageEvent, WebViewProps } from 'react-native-webview';
 import { LocateFixed, Map } from 'lucide-react-native';
 import { GPSCoordinate } from '@/types/workout';
-import { PALETTE, RADIUS, SPACING, TYPOGRAPHY } from '@/constants/Colors';
+import { RADIUS, SPACING, ThemePalette, TYPOGRAPHY } from '@/constants/Colors';
 import { MAP_CONFIG } from '@/constants/Config';
+import { usePreferences } from '@/context/AppPreferencesContext';
 
 interface WorkoutMapProps {
   currentLocation: { latitude: number; longitude: number } | null;
@@ -18,21 +19,27 @@ function buildLeafletHtml(
   initialLat: number,
   initialLng: number,
   hasInitialCoord: boolean,
-  cartoApiKey: string
+  cartoApiKey: string,
+  isDark: boolean,
+  palette: ThemePalette,
+  htmlLang: string
 ): string {
   const zoom = hasInitialCoord ? 16 : 12;
   const trimmedKey = cartoApiKey.trim();
   const hasCartoKey = trimmedKey.length > 0;
+  const cartoStyle = isDark ? 'dark_all' : 'light_all';
   const cartoTileUrl = hasCartoKey
-    ? `https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png?key=${encodeURIComponent(trimmedKey)}`
+    ? `https://{s}.basemaps.cartocdn.com/${cartoStyle}/{z}/{x}/{y}{r}.png?key=${encodeURIComponent(trimmedKey)}`
     : '';
   const osmTileUrl = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
   const attributionHtml = hasCartoKey
     ? '&copy; OpenStreetMap &copy; CARTO'
     : '&copy; OpenStreetMap';
+  const attributionBg = isDark ? 'rgba(14, 15, 12, 0.85)' : 'rgba(244, 242, 236, 0.85)';
+  const markerStrokeColor = isDark ? palette.surfaceFeature : palette.surfaceRaised;
 
   return `<!DOCTYPE html>
-<html lang="id">
+<html lang="${htmlLang}">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
@@ -44,20 +51,23 @@ function buildLeafletHtml(
       padding: 0;
       width: 100%;
       height: 100%;
-      background: ${PALETTE.surfaceAlt};
+      background: ${palette.surfaceAlt};
       overflow: hidden;
       -webkit-tap-highlight-color: transparent;
+    }
+    .osm-dark-fallback {
+      filter: brightness(0.6) invert(1) contrast(2.6) hue-rotate(200deg) saturate(0.35) brightness(0.75);
     }
     .leaflet-control-attribution {
       font-family: sans-serif;
       font-size: 9px !important;
-      background: rgba(244, 242, 236, 0.85) !important;
-      color: ${PALETTE.onSurfaceVariant} !important;
+      background: ${attributionBg} !important;
+      color: ${palette.onSurfaceVariant} !important;
       padding: 2px 6px !important;
       border-top-right-radius: 8px;
     }
     .leaflet-control-attribution a {
-      color: ${PALETTE.onSurfaceVariant} !important;
+      color: ${palette.onSurfaceVariant} !important;
       text-decoration: none;
     }
   </style>
@@ -90,6 +100,11 @@ function buildLeafletHtml(
         }
       ).addTo(map);
 
+      if (${isDark ? 'true' : 'false'} && ${hasCartoKey ? 'false' : 'true'}) {
+        var tilePaneInit = document.querySelector('.leaflet-tile-pane');
+        if (tilePaneInit) tilePaneInit.classList.add('osm-dark-fallback');
+      }
+
       ${
         hasCartoKey
           ? `var fallbackLoaded = false;
@@ -102,6 +117,10 @@ function buildLeafletHtml(
           L.tileLayer(${JSON.stringify(osmTileUrl)}, {
             maxZoom: 19
           }).addTo(map);
+          if (${isDark ? 'true' : 'false'}) {
+            var tilePane = document.querySelector('.leaflet-tile-pane');
+            if (tilePane) tilePane.classList.add('osm-dark-fallback');
+          }
         }
       });`
           : ''
@@ -125,7 +144,7 @@ function buildLeafletHtml(
         if (coords.length > 1) {
           if (!routeLine) {
             routeLine = L.polyline(coords, {
-              color: '${PALETTE.accent}',
+              color: '${palette.accent}',
               weight: 5,
               opacity: 0.96,
               lineCap: 'round',
@@ -145,9 +164,9 @@ function buildLeafletHtml(
           if (!startMarker) {
             startMarker = L.circleMarker(startLatLng, {
               radius: 6,
-              color: '${PALETTE.surfaceRaised}',
+              color: '${markerStrokeColor}',
               weight: 2.5,
-              fillColor: '${PALETTE.surfaceInverse}',
+              fillColor: '${palette.actionPrimary}',
               fillOpacity: 1
             }).addTo(map);
           } else {
@@ -164,9 +183,9 @@ function buildLeafletHtml(
           if (!endMarker) {
             endMarker = L.circleMarker(endLatLng, {
               radius: 6,
-              color: '${PALETTE.surfaceRaised}',
+              color: '${markerStrokeColor}',
               weight: 2.5,
-              fillColor: '${PALETTE.accent}',
+              fillColor: '${palette.accent}',
               fillOpacity: 1
             }).addTo(map);
           } else {
@@ -185,14 +204,14 @@ function buildLeafletHtml(
             userHalo = L.circleMarker(userLatLng, {
               radius: 15,
               stroke: false,
-              fillColor: '${PALETTE.accent}',
+              fillColor: '${palette.accent}',
               fillOpacity: 0.22
             }).addTo(map);
             userDot = L.circleMarker(userLatLng, {
               radius: 6.5,
-              color: '${PALETTE.surfaceRaised}',
+              color: '${markerStrokeColor}',
               weight: 2.5,
-              fillColor: '${PALETTE.accent}',
+              fillColor: '${palette.accent}',
               fillOpacity: 1
             }).addTo(map);
           } else {
@@ -249,19 +268,26 @@ function buildLeafletHtml(
 }
 
 export function WorkoutMap({ currentLocation, routeCoordinates, isTracking }: WorkoutMapProps) {
+  const { palette, isDark, language, t } = usePreferences();
   const webViewRef = useRef<WebView<WebViewProps> | null>(null);
   const isMapReadyRef = useRef(false);
+  const [initialAnchor] = useState<{ latitude: number; longitude: number } | null>(
+    () => currentLocation
+  );
 
-  const [webSource] = useState(() => {
-    const initialPoint = currentLocation ?? DEFAULT_COORD;
+  const webSource = useMemo(() => {
+    const anchor = initialAnchor ?? DEFAULT_COORD;
     const html = buildLeafletHtml(
-      initialPoint.latitude,
-      initialPoint.longitude,
-      Boolean(currentLocation),
-      MAP_CONFIG.cartoApiKey
+      anchor.latitude,
+      anchor.longitude,
+      Boolean(initialAnchor),
+      MAP_CONFIG.cartoApiKey,
+      isDark,
+      palette,
+      language
     );
     return { html, baseUrl: 'https://walkthetalk.app' };
-  });
+  }, [initialAnchor, isDark, palette, language]);
 
   const latestPayload = useMemo(
     () => ({
@@ -282,6 +308,10 @@ export function WorkoutMap({ currentLocation, routeCoordinates, isTracking }: Wo
       `window.__updateMapState && window.__updateMapState(${serialized}); true;`
     );
   }, []);
+
+  useEffect(() => {
+    isMapReadyRef.current = false;
+  }, [webSource]);
 
   useEffect(() => {
     latestPayloadRef.current = latestPayload;
@@ -315,20 +345,21 @@ export function WorkoutMap({ currentLocation, routeCoordinates, isTracking }: Wo
 
   if (Platform.OS === 'web') {
     return (
-      <View style={styles.webFallbackContainer}>
-        <Map size={40} strokeWidth={2} color={PALETTE.onSurfaceVariant} />
-        <Text style={styles.webFallbackText}>
-          Peta Interaktif tersedia di perangkat Android &amp; iOS.
+      <View style={[styles.webFallbackContainer, { backgroundColor: palette.surfaceAlt }]}>
+        <Map size={40} strokeWidth={2} color={palette.onSurfaceVariant} />
+        <Text style={[styles.webFallbackText, { color: palette.onSurfaceVariant }]}>
+          {t.map.webFallback}
         </Text>
       </View>
     );
   }
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: palette.surfaceAlt }]}>
       <WebView<WebViewProps>
+        key={isDark ? 'map-dark' : 'map-light'}
         ref={webViewRef}
-        style={styles.webview}
+        style={[styles.webview, { backgroundColor: palette.surfaceAlt }]}
         originWhitelist={['*']}
         source={webSource}
         onMessage={handleWebViewMessage}
@@ -345,11 +376,16 @@ export function WorkoutMap({ currentLocation, routeCoordinates, isTracking }: Wo
       {(currentLocation || routeCoordinates.length > 1) && (
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Pusatkan peta ke lokasi saya"
-          style={({ pressed }) => [styles.centerButton, pressed && { opacity: 0.78 }]}
+          accessibilityLabel={t.map.centerA11y}
+          style={({ pressed }) => [
+            styles.centerButton,
+            { backgroundColor: palette.surfaceRaised },
+            isDark && { borderWidth: 1, borderColor: palette.border },
+            pressed && { opacity: 0.78 },
+          ]}
           onPress={handleCenterOnUser}
         >
-          <LocateFixed size={18} strokeWidth={2} color={PALETTE.onSurface} />
+          <LocateFixed size={18} strokeWidth={2} color={palette.onSurface} />
         </Pressable>
       )}
     </View>
@@ -360,17 +396,14 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     overflow: 'hidden',
-    backgroundColor: PALETTE.surfaceAlt,
   },
   webview: {
     flex: 1,
-    backgroundColor: PALETTE.surfaceAlt,
   },
   centerButton: {
     position: 'absolute',
     bottom: 14,
     right: 14,
-    backgroundColor: PALETTE.surfaceRaised,
     width: 40,
     height: 40,
     borderRadius: RADIUS.full,
@@ -379,14 +412,12 @@ const styles = StyleSheet.create({
   },
   webFallbackContainer: {
     flex: 1,
-    backgroundColor: PALETTE.surfaceAlt,
     alignItems: 'center',
     justifyContent: 'center',
     padding: SPACING.xxl,
   },
   webFallbackText: {
     ...TYPOGRAPHY.bodyMd,
-    color: PALETTE.onSurfaceVariant,
     marginTop: SPACING.md,
     textAlign: 'center',
   },

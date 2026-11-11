@@ -19,15 +19,17 @@ import {
 } from 'lucide-react-native';
 import { useSpotifyAuth } from '@/hooks/useSpotifyAuth';
 import { useSpotifyPlayer } from '@/hooks/useSpotifyPlayer';
-import { FONT_FAMILY, PALETTE, RADIUS, SPACING, TYPOGRAPHY } from '@/constants/Colors';
+import { FONT_FAMILY, RADIUS, SPACING, TYPOGRAPHY } from '@/constants/Colors';
+import { usePreferences } from '@/context/AppPreferencesContext';
 import { SpotifyAttribution } from './SpotifyAttribution';
 import { DevicePickerModal } from './DevicePickerModal';
 
 /**
- * Floating-style card-inverse (#0E0F0C) Mini Player untuk Home & layar Lari.
+ * Floating-style card-inverse Mini Player untuk Home & layar Lari.
  * Menggunakan paper pill untuk tombol play/pause agar alokasi warna Lime tetap tunggal per layar.
  */
 export function RunnerMiniPlayer() {
+  const { palette, isDark, t } = usePreferences();
   const { isAuthenticated, login, isLoading: isAuthLoading } = useSpotifyAuth();
   const {
     currentTrack,
@@ -45,33 +47,50 @@ export function RunnerMiniPlayer() {
 
   const [deviceModalVisible, setDeviceModalVisible] = useState(false);
 
+  const cardSurfaceStyle = [
+    styles.container,
+    { backgroundColor: palette.surfaceFeature },
+    isDark && { borderWidth: 1, borderColor: palette.border },
+  ];
+
   // Belum login ke Spotify
   if (!isAuthenticated) {
     return (
-      <View style={styles.container}>
+      <View style={cardSurfaceStyle}>
         <View style={styles.notAuthRow}>
           <View style={styles.notAuthInfo}>
             <View style={styles.spotifyMarkWrap}>
-              <FontAwesome name="spotify" size={20} color={PALETTE.spotifyGreen} />
+              <FontAwesome name="spotify" size={20} color={palette.spotifyGreen} />
             </View>
             <View style={{ flex: 1, minWidth: 0 }}>
-              <Text style={styles.kickerInverse}>SPOTIFY CONNECT</Text>
-              <Text style={styles.notAuthTitle} numberOfLines={1}>
-                Putar musik saat berlari
+              <Text style={[styles.kickerInverse, { color: palette.onFeatureMuted }]}>
+                {t.music.deviceModalKicker}
+              </Text>
+              <Text
+                style={[styles.notAuthTitle, { color: palette.onFeature }]}
+                numberOfLines={1}
+              >
+                {t.music.miniNotAuthTitle}
               </Text>
             </View>
           </View>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Hubungkan akun Spotify"
-            style={({ pressed }) => [styles.connectButton, pressed && { opacity: 0.85 }]}
+            accessibilityLabel={t.music.miniConnectA11y}
+            style={({ pressed }) => [
+              styles.connectButton,
+              { backgroundColor: palette.onFeature },
+              pressed && { opacity: 0.85 },
+            ]}
             onPress={login}
             disabled={isAuthLoading}
           >
             {isAuthLoading ? (
-              <ActivityIndicator size="small" color={PALETTE.onSurface} />
+              <ActivityIndicator size="small" color={palette.surfaceFeature} />
             ) : (
-              <Text style={styles.connectButtonText}>Hubungkan</Text>
+              <Text style={[styles.connectButtonText, { color: palette.surfaceFeature }]}>
+                {t.music.miniConnect}
+              </Text>
             )}
           </Pressable>
         </View>
@@ -82,10 +101,10 @@ export function RunnerMiniPlayer() {
   // Sudah login tetapi belum ada lagu aktif
   if (!currentTrack) {
     return (
-      <View style={styles.container}>
+      <View style={cardSurfaceStyle}>
         {errorMessage ? (
           <View style={styles.errorBanner}>
-            <Text style={styles.errorText} numberOfLines={1}>
+            <Text style={[styles.errorText, { color: palette.accent }]} numberOfLines={1}>
               {errorMessage}
             </Text>
           </View>
@@ -93,39 +112,48 @@ export function RunnerMiniPlayer() {
 
         <View style={styles.emptyRow}>
           <View style={styles.spotifyMarkWrap}>
-            <FontAwesome name="spotify" size={20} color={PALETTE.spotifyGreen} />
+            <FontAwesome name="spotify" size={20} color={palette.spotifyGreen} />
           </View>
           <View style={{ flex: 1, minWidth: 0, marginHorizontal: SPACING.md }}>
-            <Text style={styles.kickerInverse}>SPOTIFY SIAP</Text>
-            <Text style={styles.emptySubtitle} numberOfLines={1}>
+            <Text style={[styles.kickerInverse, { color: palette.onFeatureMuted }]}>
+              {t.music.miniReadyKicker}
+            </Text>
+            <Text
+              style={[styles.emptySubtitle, { color: palette.onFeature }]}
+              numberOfLines={1}
+            >
               {activeDevice
-                ? `Aktif di ${activeDevice.name}`
-                : 'Tekan Play untuk mulai memutar'}
+                ? t.music.miniActiveIn(activeDevice.name)
+                : t.music.miniTapToPlay}
             </Text>
           </View>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Putar musik Spotify"
-            style={({ pressed }) => [styles.paperCirclePlay, pressed && { opacity: 0.78 }]}
+            accessibilityLabel={t.music.miniPlayA11y}
+            style={({ pressed }) => [
+              styles.paperCirclePlay,
+              { backgroundColor: palette.onFeature },
+              pressed && { opacity: 0.78 },
+            ]}
             onPress={togglePlay}
             disabled={isPlayerLoading}
           >
             {isPlayerLoading ? (
-              <ActivityIndicator size="small" color={PALETTE.onSurface} />
+              <ActivityIndicator size="small" color={palette.surfaceFeature} />
             ) : (
-              <Play size={16} strokeWidth={2} color={PALETTE.onSurface} />
+              <Play size={16} strokeWidth={2} color={palette.surfaceFeature} />
             )}
           </Pressable>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Pilih perangkat Spotify"
+            accessibilityLabel={t.music.miniSelectDeviceA11y}
             style={({ pressed }) => [styles.devicesButton, pressed && { opacity: 0.7 }]}
             onPress={() => {
               refreshDevices();
               setDeviceModalVisible(true);
             }}
           >
-            <Cpu size={16} strokeWidth={2} color={PALETTE.onInverse} />
+            <Cpu size={16} strokeWidth={2} color={palette.onFeature} />
           </Pressable>
         </View>
 
@@ -147,10 +175,10 @@ export function RunnerMiniPlayer() {
   const artistNames = currentTrack.artists?.map((a) => a.name).join(', ') || 'Unknown Artist';
 
   return (
-    <View style={styles.container}>
+    <View style={cardSurfaceStyle}>
       {errorMessage ? (
         <View style={styles.errorBanner}>
-          <Text style={styles.errorText} numberOfLines={1}>
+          <Text style={[styles.errorText, { color: palette.accent }]} numberOfLines={1}>
             {errorMessage}
           </Text>
         </View>
@@ -162,16 +190,19 @@ export function RunnerMiniPlayer() {
           {albumImageUrl ? (
             <Image source={{ uri: albumImageUrl }} style={styles.albumArt} resizeMode="cover" />
           ) : (
-            <Music size={20} strokeWidth={2} color={PALETTE.onInverseMuted} />
+            <Music size={20} strokeWidth={2} color={palette.onFeatureMuted} />
           )}
         </View>
 
         {/* Track & Artist Info */}
         <View style={styles.trackInfo}>
-          <Text style={styles.trackTitle} numberOfLines={1}>
+          <Text style={[styles.trackTitle, { color: palette.onFeature }]} numberOfLines={1}>
             {currentTrack.name}
           </Text>
-          <Text style={styles.trackArtist} numberOfLines={1}>
+          <Text
+            style={[styles.trackArtist, { color: palette.onFeatureMuted }]}
+            numberOfLines={1}
+          >
             {artistNames}
           </Text>
           <View style={styles.deviceRow}>
@@ -179,15 +210,18 @@ export function RunnerMiniPlayer() {
             {activeDevice && (
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel={`Perangkat aktif ${activeDevice.name}`}
+                accessibilityLabel={t.music.miniActiveDeviceA11y(activeDevice.name)}
                 onPress={() => {
                   refreshDevices();
                   setDeviceModalVisible(true);
                 }}
                 style={({ pressed }) => [styles.deviceIndicator, pressed && { opacity: 0.7 }]}
               >
-                <Volume2 size={12} strokeWidth={2} color={PALETTE.spotifyGreen} />
-                <Text style={styles.deviceName} numberOfLines={1}>
+                <Volume2 size={12} strokeWidth={2} color={palette.spotifyGreen} />
+                <Text
+                  style={[styles.deviceName, { color: palette.onFeature }]}
+                  numberOfLines={1}
+                >
                   {activeDevice.name}
                 </Text>
               </Pressable>
@@ -199,40 +233,44 @@ export function RunnerMiniPlayer() {
         <View style={styles.controlsRow}>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Lagu sebelumnya"
+            accessibilityLabel={t.music.miniPrevA11y}
             onPress={previous}
             disabled={isPlayerLoading}
             hitSlop={8}
             style={({ pressed }) => [pressed && { opacity: 0.65 }]}
           >
-            <SkipBack size={18} strokeWidth={2} color={PALETTE.onInverse} />
+            <SkipBack size={18} strokeWidth={2} color={palette.onFeature} />
           </Pressable>
 
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={isPlaying ? 'Jeda musik' : 'Putar musik'}
-            style={({ pressed }) => [styles.paperCirclePlay, pressed && { opacity: 0.8 }]}
+            accessibilityLabel={isPlaying ? t.music.miniPauseA11y : t.music.miniResumeA11y}
+            style={({ pressed }) => [
+              styles.paperCirclePlay,
+              { backgroundColor: palette.onFeature },
+              pressed && { opacity: 0.8 },
+            ]}
             onPress={togglePlay}
             disabled={isPlayerLoading}
           >
             {isPlayerLoading ? (
-              <ActivityIndicator size="small" color={PALETTE.onSurface} />
+              <ActivityIndicator size="small" color={palette.surfaceFeature} />
             ) : isPlaying ? (
-              <Pause size={16} strokeWidth={2} color={PALETTE.onSurface} />
+              <Pause size={16} strokeWidth={2} color={palette.surfaceFeature} />
             ) : (
-              <Play size={16} strokeWidth={2} color={PALETTE.onSurface} />
+              <Play size={16} strokeWidth={2} color={palette.surfaceFeature} />
             )}
           </Pressable>
 
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Lagu berikutnya"
+            accessibilityLabel={t.music.miniNextA11y}
             onPress={next}
             disabled={isPlayerLoading}
             hitSlop={8}
             style={({ pressed }) => [pressed && { opacity: 0.65 }]}
           >
-            <SkipForward size={18} strokeWidth={2} color={PALETTE.onInverse} />
+            <SkipForward size={18} strokeWidth={2} color={palette.onFeature} />
           </Pressable>
         </View>
       </View>
@@ -253,14 +291,12 @@ export function RunnerMiniPlayer() {
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: PALETTE.surfaceInverse,
     borderRadius: RADIUS.lg,
     borderCurve: 'continuous',
     padding: SPACING.lg,
   },
   kickerInverse: {
     ...TYPOGRAPHY.caption,
-    color: PALETTE.onInverseMuted,
     marginBottom: 2,
   },
   errorBanner: {
@@ -272,7 +308,6 @@ const styles = StyleSheet.create({
   },
   errorText: {
     ...TYPOGRAPHY.labelSm,
-    color: PALETTE.accent,
   },
   playerRow: {
     flexDirection: 'row',
@@ -300,11 +335,9 @@ const styles = StyleSheet.create({
   },
   trackTitle: {
     ...TYPOGRAPHY.headlineSm,
-    color: PALETTE.onInverse,
   },
   trackArtist: {
     ...TYPOGRAPHY.bodySm,
-    color: PALETTE.onInverseMuted,
     marginTop: 2,
   },
   deviceRow: {
@@ -321,7 +354,6 @@ const styles = StyleSheet.create({
   },
   deviceName: {
     ...TYPOGRAPHY.labelSm,
-    color: PALETTE.onInverse,
     maxWidth: 100,
   },
   controlsRow: {
@@ -330,7 +362,6 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   paperCirclePlay: {
-    backgroundColor: PALETTE.onInverse,
     width: 36,
     height: 36,
     borderRadius: RADIUS.full,
@@ -360,10 +391,8 @@ const styles = StyleSheet.create({
   },
   notAuthTitle: {
     ...TYPOGRAPHY.headlineSm,
-    color: PALETTE.onInverse,
   },
   connectButton: {
-    backgroundColor: PALETTE.onInverse,
     height: 36,
     paddingHorizontal: SPACING.lg,
     borderRadius: RADIUS.full,
@@ -373,7 +402,6 @@ const styles = StyleSheet.create({
   connectButtonText: {
     ...TYPOGRAPHY.labelMd,
     fontFamily: FONT_FAMILY.bodySemiBold,
-    color: PALETTE.onSurface,
   },
   emptyRow: {
     flexDirection: 'row',
@@ -381,7 +409,6 @@ const styles = StyleSheet.create({
   },
   emptySubtitle: {
     ...TYPOGRAPHY.bodySm,
-    color: PALETTE.onInverse,
   },
   devicesButton: {
     backgroundColor: 'rgba(244, 242, 236, 0.14)',

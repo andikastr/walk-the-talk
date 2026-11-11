@@ -19,7 +19,9 @@ import {
   User,
 } from 'lucide-react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { FONT_FAMILY, PALETTE, RADIUS, SPACING, TYPOGRAPHY } from '@/constants/Colors';
+import { FONT_FAMILY, RADIUS, SPACING, TYPOGRAPHY } from '@/constants/Colors';
+import { getActivityLabel } from '@/constants/i18n';
+import { usePreferences } from '@/context/AppPreferencesContext';
 import { WorkoutRecord } from '@/types/workout';
 import { formatDuration } from '@/services/location/metrics';
 
@@ -32,11 +34,13 @@ export function KickerText({
   style,
   ...props
 }: TextProps & { inverse?: boolean }) {
+  const { palette } = usePreferences();
+
   return (
     <Text
       style={[
         TYPOGRAPHY.labelUppercase,
-        { color: inverse ? PALETTE.onInverseMuted : PALETTE.onSurfaceVariant },
+        { color: inverse ? palette.onFeatureMuted : palette.onSurfaceVariant },
         style,
       ]}
       {...props}
@@ -47,7 +51,7 @@ export function KickerText({
 }
 
 /**
- * Tombol ikon bulat 40x40 berlatar paper-alt (#EBE8E0) dengan opsional 6px ember alert dot.
+ * Tombol ikon bulat 40x40 berlatar surface-alt dengan opsional 6px ember alert dot.
  */
 export function IconCircleButton({
   icon,
@@ -64,12 +68,13 @@ export function IconCircleButton({
   variant?: 'surfaceAlt' | 'inverse' | 'raised';
   style?: StyleProp<ViewStyle>;
 }) {
+  const { palette, isDark } = usePreferences();
   const bgColor =
     variant === 'inverse'
-      ? PALETTE.surfaceInverse
+      ? palette.actionPrimary
       : variant === 'raised'
-      ? PALETTE.surfaceRaised
-      : PALETTE.surfaceAlt;
+      ? palette.surfaceRaised
+      : palette.surfaceAlt;
 
   return (
     <Pressable
@@ -79,19 +84,20 @@ export function IconCircleButton({
       style={({ pressed }) => [
         styles.iconButton,
         { backgroundColor: bgColor },
+        isDark && variant !== 'inverse' && { borderWidth: 1, borderColor: palette.border },
         pressed && { opacity: 0.72 },
         style,
       ]}
     >
       {icon}
-      {showBadgeDot && <View style={styles.badgeDot} />}
+      {showBadgeDot && <View style={[styles.badgeDot, { backgroundColor: palette.accent }]} />}
     </Pressable>
   );
 }
 
 /**
- * Header halaman editorial ("top-app-bar"): avatar + salam 2 baris di kiri, 2 tombol ikon di kanan.
- * Duduk langsung di atas warm paper (#F4F2EC) tanpa latar bar tambahan.
+ * Header halaman editorial ("top-app-bar"): avatar + salam 2 baris di kiri, tombol ikon di kanan.
+ * Duduk langsung di atas surface utama tanpa latar bar tambahan.
  */
 export function TopAppBar({
   kicker,
@@ -107,21 +113,28 @@ export function TopAppBar({
   includeSafeAreaTop?: boolean;
 }) {
   const insets = useSafeAreaInsets();
+  const { palette, isDark } = usePreferences();
   const topPad = includeSafeAreaTop ? Math.max(insets.top, 12) + 8 : 12;
 
   return (
     <View style={[styles.topBar, { paddingTop: topPad }]}>
       <View style={styles.topBarLeft}>
-        <View style={styles.avatarContainer}>
+        <View
+          style={[
+            styles.avatarContainer,
+            { backgroundColor: palette.surfaceAlt },
+            isDark && { borderWidth: 1, borderColor: palette.border },
+          ]}
+        >
           {avatarUrl ? (
             <Image source={{ uri: avatarUrl }} style={styles.avatarImage} resizeMode="cover" />
           ) : (
-            <User size={18} strokeWidth={2} color={PALETTE.onSurfaceVariant} />
+            <User size={18} strokeWidth={2} color={palette.onSurfaceVariant} />
           )}
         </View>
         <View style={styles.topBarTextCol}>
           <KickerText numberOfLines={1}>{kicker}</KickerText>
-          <Text style={styles.topBarTitle} numberOfLines={1}>
+          <Text style={[styles.topBarTitle, { color: palette.onSurface }]} numberOfLines={1}>
             {title}
           </Text>
         </View>
@@ -133,8 +146,8 @@ export function TopAppBar({
 }
 
 /**
- * Kartu baris aktivitas putih ("list-row" / "card-raised") sesuai DESIGN.md:
- * thumbnail ink 72x72 (radius 18), kicker + judul + metrik tabular dengan ember untuk kalori.
+ * Kartu baris aktivitas ("list-row" / "card-raised") sesuai DESIGN.md:
+ * thumbnail gelap 72x72 (radius 18), kicker + judul + metrik tabular dengan ember untuk kalori.
  */
 export function ActivityRowCard({
   workout,
@@ -147,49 +160,57 @@ export function ActivityRowCard({
   onPress: () => void;
   onDelete?: () => void;
 }) {
+  const { palette, isDark, locale, t } = usePreferences();
+
   const dateObj = new Date(workout.startTime);
   const dateStr =
     dateFormat === 'full'
-      ? dateObj.toLocaleDateString('id-ID', {
+      ? dateObj.toLocaleDateString(locale, {
           day: 'numeric',
           month: 'short',
           year: 'numeric',
         })
-      : dateObj.toLocaleDateString('id-ID', {
+      : dateObj.toLocaleDateString(locale, {
           weekday: 'short',
           day: 'numeric',
           month: 'short',
         });
 
-  const timeStr = dateObj.toLocaleTimeString('id-ID', {
+  const timeStr = dateObj.toLocaleTimeString(locale, {
     hour: '2-digit',
     minute: '2-digit',
   });
 
-  const typeLabel =
-    workout.type === 'walk' ? 'JALAN' : workout.type === 'jog' ? 'JOGGING' : 'LARI';
+  const typeLabel = getActivityLabel(workout.type, t, true);
   const distKm = (workout.distanceMeters / 1000).toFixed(2);
 
   const renderActivityGlyph = () => {
     if (workout.type === 'walk') {
-      return <Footprints size={24} strokeWidth={2} color={PALETTE.onInverse} />;
+      return <Footprints size={24} strokeWidth={2} color={palette.onFeature} />;
     }
     if (workout.type === 'jog') {
-      return <Activity size={24} strokeWidth={2} color={PALETTE.onInverse} />;
+      return <Activity size={24} strokeWidth={2} color={palette.onFeature} />;
     }
-    return <Flame size={24} strokeWidth={2} color={PALETTE.onInverse} />;
+    return <Flame size={24} strokeWidth={2} color={palette.onFeature} />;
   };
 
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`${workout.title}, ${distKm} kilometer`}
+      accessibilityLabel={`${workout.title}, ${distKm} ${t.common.kmUnit}`}
       onPress={onPress}
-      style={({ pressed }) => [styles.listRow, pressed && { opacity: 0.78 }]}
+      style={({ pressed }) => [
+        styles.listRow,
+        { backgroundColor: palette.surfaceRaised },
+        isDark && { borderWidth: 1, borderColor: palette.border },
+        pressed && { opacity: 0.78 },
+      ]}
     >
-      <View style={styles.thumbFrame}>
+      <View style={[styles.thumbFrame, { backgroundColor: palette.surfaceFeature }]}>
         {renderActivityGlyph()}
-        <Text style={styles.thumbCaption}>{workout.type.toUpperCase()}</Text>
+        <Text style={[styles.thumbCaption, { color: palette.onFeatureMuted }]}>
+          {typeLabel}
+        </Text>
       </View>
 
       <View style={styles.rowBody}>
@@ -197,26 +218,35 @@ export function ActivityRowCard({
           {typeLabel} · {dateStr} {dateFormat === 'full' ? `· ${timeStr}` : ''}
         </KickerText>
 
-        <Text style={styles.rowTitle} numberOfLines={1}>
+        <Text style={[styles.rowTitle, { color: palette.onSurface }]} numberOfLines={1}>
           {workout.title}
         </Text>
 
         <View style={styles.metaStrip}>
-          <Text style={styles.metaText}>
-            <Text style={styles.metaNumInk}>{distKm}</Text> km
+          <Text style={[styles.metaText, { color: palette.onSurfaceVariant }]}>
+            <Text style={[styles.metaNumInk, { color: palette.onSurface }]}>{distKm}</Text>{' '}
+            {t.common.kmUnit}
           </Text>
-          <View style={styles.metaDivider} />
-          <Text style={styles.metaText}>
-            <Text style={styles.metaNumEmber}>{workout.caloriesKcal}</Text> kcal
+          <View style={[styles.metaDivider, { backgroundColor: palette.border }]} />
+          <Text style={[styles.metaText, { color: palette.onSurfaceVariant }]}>
+            <Text style={[styles.metaNumEmber, { color: palette.accent }]}>
+              {workout.caloriesKcal}
+            </Text>{' '}
+            {t.common.kcalUnit}
           </Text>
-          <View style={styles.metaDivider} />
-          <Text style={styles.metaText}>{formatDuration(workout.durationSeconds)}</Text>
+          <View style={[styles.metaDivider, { backgroundColor: palette.border }]} />
+          <Text style={[styles.metaText, { color: palette.onSurfaceVariant }]}>
+            {formatDuration(workout.durationSeconds)}
+          </Text>
         </View>
 
         {workout.soundtrackTrackName ? (
           <View style={styles.soundtrackInline}>
-            <Music size={12} strokeWidth={2} color={PALETTE.onSurfaceVariant} />
-            <Text style={styles.soundtrackInlineText} numberOfLines={1}>
+            <Music size={12} strokeWidth={2} color={palette.onSurfaceVariant} />
+            <Text
+              style={[styles.soundtrackInlineText, { color: palette.onSurfaceVariant }]}
+              numberOfLines={1}
+            >
               {workout.soundtrackTrackName}
             </Text>
           </View>
@@ -227,15 +257,15 @@ export function ActivityRowCard({
         {onDelete && (
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={`Hapus ${workout.title}`}
+            accessibilityLabel={t.history.deleteA11y(workout.title)}
             onPress={onDelete}
             hitSlop={10}
             style={({ pressed }) => [styles.deleteTouch, pressed && { opacity: 0.55 }]}
           >
-            <Trash2 size={16} strokeWidth={2} color={PALETTE.onSurfaceVariant} />
+            <Trash2 size={16} strokeWidth={2} color={palette.onSurfaceVariant} />
           </Pressable>
         )}
-        <ChevronRight size={18} strokeWidth={2} color={PALETTE.onSurfaceVariant} />
+        <ChevronRight size={18} strokeWidth={2} color={palette.onSurfaceVariant} />
       </View>
     </Pressable>
   );
@@ -257,7 +287,6 @@ const styles = StyleSheet.create({
     width: 6,
     height: 6,
     borderRadius: RADIUS.full,
-    backgroundColor: PALETTE.accent,
   },
   topBar: {
     flexDirection: 'row',
@@ -277,7 +306,6 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: RADIUS.full,
-    backgroundColor: PALETTE.surfaceAlt,
     overflow: 'hidden',
     alignItems: 'center',
     justifyContent: 'center',
@@ -293,7 +321,6 @@ const styles = StyleSheet.create({
   },
   topBarTitle: {
     ...TYPOGRAPHY.headlineMd,
-    color: PALETTE.onSurface,
   },
   topBarRight: {
     flexDirection: 'row',
@@ -302,7 +329,6 @@ const styles = StyleSheet.create({
     marginLeft: SPACING.md,
   },
   listRow: {
-    backgroundColor: PALETTE.surfaceRaised,
     borderRadius: RADIUS.lg,
     borderCurve: 'continuous',
     padding: SPACING.lg,
@@ -316,14 +342,12 @@ const styles = StyleSheet.create({
     height: 72,
     borderRadius: RADIUS.md,
     borderCurve: 'continuous',
-    backgroundColor: PALETTE.surfaceInverse,
     alignItems: 'center',
     justifyContent: 'center',
     gap: 4,
   },
   thumbCaption: {
     ...TYPOGRAPHY.caption,
-    color: PALETTE.onInverseMuted,
   },
   rowBody: {
     flex: 1,
@@ -331,7 +355,6 @@ const styles = StyleSheet.create({
   },
   rowTitle: {
     ...TYPOGRAPHY.cardTitle,
-    color: PALETTE.onSurface,
     marginTop: 4,
   },
   metaStrip: {
@@ -342,23 +365,19 @@ const styles = StyleSheet.create({
   },
   metaText: {
     ...TYPOGRAPHY.bodySm,
-    color: PALETTE.onSurfaceVariant,
     fontVariant: ['tabular-nums'],
   },
   metaNumInk: {
     fontFamily: FONT_FAMILY.displaySemiBold,
-    color: PALETTE.onSurface,
     fontVariant: ['tabular-nums'],
   },
   metaNumEmber: {
     fontFamily: FONT_FAMILY.displaySemiBold,
-    color: PALETTE.accent,
     fontVariant: ['tabular-nums'],
   },
   metaDivider: {
     width: 1,
     height: 12,
-    backgroundColor: PALETTE.border,
   },
   soundtrackInline: {
     flexDirection: 'row',
@@ -368,7 +387,6 @@ const styles = StyleSheet.create({
   },
   soundtrackInlineText: {
     ...TYPOGRAPHY.labelSm,
-    color: PALETTE.onSurfaceVariant,
     flex: 1,
   },
   rowActions: {

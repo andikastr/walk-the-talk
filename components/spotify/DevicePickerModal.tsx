@@ -17,7 +17,8 @@ import {
   X,
 } from 'lucide-react-native';
 import { SpotifyDevice } from '@/types/spotify';
-import { FONT_FAMILY, PALETTE, RADIUS, SPACING, TYPOGRAPHY } from '@/constants/Colors';
+import { FONT_FAMILY, RADIUS, SPACING, TYPOGRAPHY } from '@/constants/Colors';
+import { usePreferences } from '@/context/AppPreferencesContext';
 import { SpotifyAttribution } from './SpotifyAttribution';
 
 interface DevicePickerModalProps {
@@ -35,41 +36,71 @@ export function DevicePickerModal({
   onSelect,
   onClose,
 }: DevicePickerModalProps) {
+  const { palette, isDark, t } = usePreferences();
+
   const renderDeviceIcon = (type: string, isActive: boolean) => {
-    const color = isActive ? PALETTE.onInverse : PALETTE.onSurface;
-    const t = type.toLowerCase();
-    if (t.includes('computer')) return <Monitor size={20} strokeWidth={2} color={color} />;
-    if (t.includes('smartphone')) return <Smartphone size={20} strokeWidth={2} color={color} />;
-    if (t.includes('speaker')) return <Volume2 size={20} strokeWidth={2} color={color} />;
+    const color = isActive ? palette.onFeature : palette.onSurface;
+    const deviceType = type.toLowerCase();
+    if (deviceType.includes('computer')) return <Monitor size={20} strokeWidth={2} color={color} />;
+    if (deviceType.includes('smartphone')) return <Smartphone size={20} strokeWidth={2} color={color} />;
+    if (deviceType.includes('speaker')) return <Volume2 size={20} strokeWidth={2} color={color} />;
     return <Cpu size={20} strokeWidth={2} color={color} />;
   };
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <View style={styles.backdrop}>
-        <View style={styles.dialog}>
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      statusBarTranslucent
+      onRequestClose={onClose}
+    >
+      <View style={[styles.backdrop, { backgroundColor: palette.backdrop }]}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
+        <View
+          style={[
+            styles.dialog,
+            { backgroundColor: palette.modalSurface },
+            isDark && { borderWidth: 1, borderColor: palette.border },
+          ]}
+        >
           <View style={styles.header}>
             <View style={{ flex: 1, gap: 4 }}>
-              <Text style={styles.kicker}>SPOTIFY CONNECT</Text>
-              <Text style={styles.title}>Pilih Perangkat Pemutar</Text>
+              <Text style={[styles.kicker, { color: palette.onSurfaceVariant }]}>
+                {t.music.deviceModalKicker}
+              </Text>
+              <Text style={[styles.title, { color: palette.onSurface }]}>
+                {t.music.deviceModalTitle}
+              </Text>
               <SpotifyAttribution size="small" variant="light" />
             </View>
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="Tutup modal perangkat"
+              accessibilityLabel={t.music.deviceModalCloseA11y}
               onPress={onClose}
-              style={({ pressed }) => [styles.closeIconBtn, pressed && { opacity: 0.7 }]}
+              style={({ pressed }) => [
+                styles.closeIconBtn,
+                { backgroundColor: palette.modalSurfaceAlt },
+                pressed && { opacity: 0.7 },
+              ]}
             >
-              <X size={18} strokeWidth={2} color={PALETTE.onSurface} />
+              <X size={18} strokeWidth={2} color={palette.onSurface} />
             </Pressable>
           </View>
 
           {devices.length === 0 ? (
-            <View style={styles.emptyContainer}>
-              <AlertCircle size={32} strokeWidth={2} color={PALETTE.onSurfaceVariant} />
-              <Text style={styles.emptyText}>Tidak ada perangkat aktif terdeteksi.</Text>
-              <Text style={styles.emptyHint}>
-                Buka aplikasi Spotify di smartphone, tablet, atau komputer Anda lalu putar satu lagu.
+            <View
+              style={[
+                styles.emptyContainer,
+                { backgroundColor: palette.modalSurfaceAlt },
+              ]}
+            >
+              <AlertCircle size={32} strokeWidth={2} color={palette.onSurfaceVariant} />
+              <Text style={[styles.emptyText, { color: palette.onSurface }]}>
+                {t.music.deviceModalEmpty}
+              </Text>
+              <Text style={[styles.emptyHint, { color: palette.onSurfaceVariant }]}>
+                {t.music.deviceModalEmptyHint}
               </Text>
             </View>
           ) : (
@@ -85,7 +116,13 @@ export function DevicePickerModal({
                     accessibilityState={{ selected: isActive }}
                     style={({ pressed }) => [
                       styles.deviceItem,
-                      isActive && styles.deviceItemActive,
+                      {
+                        backgroundColor: isActive
+                          ? palette.surfaceFeature
+                          : palette.modalSurfaceAlt,
+                      },
+                      isActive &&
+                        isDark && { borderWidth: 1, borderColor: palette.primary },
                       pressed && { opacity: 0.8 },
                     ]}
                     onPress={() => item.id && onSelect(item.id)}
@@ -95,7 +132,7 @@ export function DevicePickerModal({
                       <Text
                         style={[
                           styles.deviceName,
-                          isActive && { color: PALETTE.onInverse },
+                          { color: isActive ? palette.onFeature : palette.onSurface },
                         ]}
                         numberOfLines={1}
                       >
@@ -104,14 +141,18 @@ export function DevicePickerModal({
                       <Text
                         style={[
                           styles.deviceType,
-                          isActive && { color: PALETTE.onInverseMuted },
+                          {
+                            color: isActive
+                              ? palette.onFeatureMuted
+                              : palette.onSurfaceVariant,
+                          },
                         ]}
                       >
                         {item.type}
                       </Text>
                     </View>
                     {isActive && (
-                      <Check size={18} strokeWidth={2.2} color={PALETTE.primary} />
+                      <Check size={18} strokeWidth={2.2} color={palette.primary} />
                     )}
                   </Pressable>
                 );
@@ -121,10 +162,16 @@ export function DevicePickerModal({
 
           <Pressable
             accessibilityRole="button"
-            style={({ pressed }) => [styles.closeButton, pressed && { opacity: 0.85 }]}
+            style={({ pressed }) => [
+              styles.closeButton,
+              { backgroundColor: palette.actionPrimary },
+              pressed && { opacity: 0.85 },
+            ]}
             onPress={onClose}
           >
-            <Text style={styles.closeButtonText}>Tutup</Text>
+            <Text style={[styles.closeButtonText, { color: palette.onActionPrimary }]}>
+              {t.common.close}
+            </Text>
           </Pressable>
         </View>
       </View>
@@ -135,7 +182,6 @@ export function DevicePickerModal({
 const styles = StyleSheet.create({
   backdrop: {
     flex: 1,
-    backgroundColor: 'rgba(14, 15, 12, 0.55)',
     justifyContent: 'center',
     alignItems: 'center',
     padding: SPACING.xl,
@@ -143,7 +189,6 @@ const styles = StyleSheet.create({
   dialog: {
     width: '100%',
     maxWidth: 380,
-    backgroundColor: PALETTE.surface,
     borderRadius: RADIUS.lg,
     borderCurve: 'continuous',
     padding: SPACING.xl,
@@ -156,22 +201,18 @@ const styles = StyleSheet.create({
   },
   kicker: {
     ...TYPOGRAPHY.labelUppercase,
-    color: PALETTE.onSurfaceVariant,
   },
   title: {
     ...TYPOGRAPHY.headlineMd,
-    color: PALETTE.onSurface,
   },
   closeIconBtn: {
     width: 40,
     height: 40,
     borderRadius: RADIUS.full,
-    backgroundColor: PALETTE.surfaceAlt,
     alignItems: 'center',
     justifyContent: 'center',
   },
   emptyContainer: {
-    backgroundColor: PALETTE.surfaceAlt,
     borderRadius: RADIUS.lg,
     borderCurve: 'continuous',
     alignItems: 'center',
@@ -179,13 +220,11 @@ const styles = StyleSheet.create({
   },
   emptyText: {
     ...TYPOGRAPHY.headlineSm,
-    color: PALETTE.onSurface,
     marginTop: SPACING.sm,
     textAlign: 'center',
   },
   emptyHint: {
     ...TYPOGRAPHY.bodySm,
-    color: PALETTE.onSurfaceVariant,
     textAlign: 'center',
     marginTop: SPACING.xs,
   },
@@ -197,10 +236,6 @@ const styles = StyleSheet.create({
     borderRadius: RADIUS.lg,
     borderCurve: 'continuous',
     marginBottom: SPACING.sm,
-    backgroundColor: PALETTE.surfaceAlt,
-  },
-  deviceItemActive: {
-    backgroundColor: PALETTE.surfaceInverse,
   },
   deviceInfo: {
     flex: 1,
@@ -209,14 +244,11 @@ const styles = StyleSheet.create({
   deviceName: {
     ...TYPOGRAPHY.cardTitle,
     fontSize: 15,
-    color: PALETTE.onSurface,
   },
   deviceType: {
     ...TYPOGRAPHY.bodySm,
-    color: PALETTE.onSurfaceVariant,
   },
   closeButton: {
-    backgroundColor: PALETTE.surfaceInverse,
     height: 44,
     paddingHorizontal: SPACING.xl,
     borderRadius: RADIUS.full,
@@ -227,6 +259,5 @@ const styles = StyleSheet.create({
   closeButtonText: {
     ...TYPOGRAPHY.labelMd,
     fontFamily: FONT_FAMILY.bodySemiBold,
-    color: PALETTE.onInverse,
   },
 });

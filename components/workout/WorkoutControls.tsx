@@ -2,7 +2,9 @@ import React from 'react';
 import { StyleSheet, View, Text, Pressable } from 'react-native';
 import { Activity, Flame, Footprints, Pause, Play, Square } from 'lucide-react-native';
 import { WorkoutType, WorkoutStatus } from '@/types/workout';
-import { FONT_FAMILY, PALETTE, RADIUS, SPACING, TYPOGRAPHY } from '@/constants/Colors';
+import { FONT_FAMILY, RADIUS, SPACING, TYPOGRAPHY } from '@/constants/Colors';
+import { getActivityLabel } from '@/constants/i18n';
+import { usePreferences } from '@/context/AppPreferencesContext';
 
 interface WorkoutControlsProps {
   status: WorkoutStatus;
@@ -23,15 +25,17 @@ export function WorkoutControls({
   onResume,
   onStop,
 }: WorkoutControlsProps) {
+  const { palette, isDark, t } = usePreferences();
+
   if (status === 'idle') {
     const types: { key: WorkoutType; label: string }[] = [
-      { key: 'walk', label: 'Jalan' },
-      { key: 'jog', label: 'Jogging' },
-      { key: 'run', label: 'Lari' },
+      { key: 'walk', label: getActivityLabel('walk', t) },
+      { key: 'jog', label: getActivityLabel('jog', t) },
+      { key: 'run', label: getActivityLabel('run', t) },
     ];
 
     const renderTypeIcon = (type: WorkoutType, active: boolean) => {
-      const color = active ? PALETTE.onInverse : PALETTE.onSurfaceVariant;
+      const color = active ? palette.onActionPrimary : palette.onSurfaceVariant;
       if (type === 'walk') return <Footprints size={15} strokeWidth={2} color={color} />;
       if (type === 'jog') return <Activity size={15} strokeWidth={2} color={color} />;
       return <Flame size={15} strokeWidth={2} color={color} />;
@@ -50,13 +54,27 @@ export function WorkoutControls({
                 accessibilityState={{ selected: isSelected }}
                 style={({ pressed }) => [
                   styles.typeChip,
-                  isSelected && styles.typeChipActive,
+                  {
+                    backgroundColor: isSelected
+                      ? palette.actionPrimary
+                      : palette.surfaceAlt,
+                  },
+                  !isSelected && isDark && { borderWidth: 1, borderColor: palette.border },
                   pressed && { opacity: 0.78 },
                 ]}
                 onPress={() => onSelectType(key)}
               >
                 {renderTypeIcon(key, isSelected)}
-                <Text style={[styles.typeText, isSelected && styles.typeTextActive]}>
+                <Text
+                  style={[
+                    styles.typeText,
+                    {
+                      color: isSelected
+                        ? palette.onActionPrimary
+                        : palette.onSurfaceVariant,
+                    },
+                  ]}
+                >
                   {label}
                 </Text>
               </Pressable>
@@ -67,15 +85,17 @@ export function WorkoutControls({
         {/* Single Electric Lime Pill CTA */}
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Mulai aktivitas olahraga"
+          accessibilityLabel={t.controls.startActivityA11y}
           style={({ pressed }) => [
             styles.limePrimaryButton,
-            pressed && { backgroundColor: PALETTE.primaryDeep },
+            { backgroundColor: pressed ? palette.primaryDeep : palette.primary },
           ]}
           onPress={onStart}
         >
-          <Play size={18} strokeWidth={2} color={PALETTE.onPrimary} />
-          <Text style={styles.limePrimaryText}>Mulai Aktivitas</Text>
+          <Play size={18} strokeWidth={2} color={palette.onPrimary} />
+          <Text style={[styles.limePrimaryText, { color: palette.onPrimary }]}>
+            {t.controls.startActivity}
+          </Text>
         </Pressable>
       </View>
     );
@@ -86,15 +106,18 @@ export function WorkoutControls({
       <View style={styles.actionRow}>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Jeda aktivitas"
+          accessibilityLabel={t.controls.pauseSessionA11y}
           style={({ pressed }) => [
             styles.inkPrimaryButton,
+            { backgroundColor: palette.actionPrimary },
             pressed && { opacity: 0.85 },
           ]}
           onPress={onPause}
         >
-          <Pause size={18} strokeWidth={2} color={PALETTE.onInverse} />
-          <Text style={styles.inkPrimaryText}>Jeda Sesi</Text>
+          <Pause size={18} strokeWidth={2} color={palette.onActionPrimary} />
+          <Text style={[styles.inkPrimaryText, { color: palette.onActionPrimary }]}>
+            {t.controls.pauseSession}
+          </Text>
         </Pressable>
       </View>
     );
@@ -105,28 +128,33 @@ export function WorkoutControls({
       <View style={styles.pausedActionRow}>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Selesaikan aktivitas"
+          accessibilityLabel={t.controls.finishA11y}
           style={({ pressed }) => [
             styles.inkSecondaryButton,
+            { backgroundColor: palette.actionPrimary },
             pressed && { opacity: 0.85 },
           ]}
           onPress={onStop}
         >
-          <Square size={16} strokeWidth={2} color={PALETTE.onInverse} />
-          <Text style={styles.inkPrimaryText}>Selesai</Text>
+          <Square size={16} strokeWidth={2} color={palette.onActionPrimary} />
+          <Text style={[styles.inkPrimaryText, { color: palette.onActionPrimary }]}>
+            {t.controls.finish}
+          </Text>
         </Pressable>
 
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Lanjutkan aktivitas"
+          accessibilityLabel={t.controls.resumeA11y}
           style={({ pressed }) => [
             styles.limeResumeButton,
-            pressed && { backgroundColor: PALETTE.primaryDeep },
+            { backgroundColor: pressed ? palette.primaryDeep : palette.primary },
           ]}
           onPress={onResume}
         >
-          <Play size={18} strokeWidth={2} color={PALETTE.onPrimary} />
-          <Text style={styles.limePrimaryText}>Lanjutkan</Text>
+          <Play size={18} strokeWidth={2} color={palette.onPrimary} />
+          <Text style={[styles.limePrimaryText, { color: palette.onPrimary }]}>
+            {t.controls.resume}
+          </Text>
         </Pressable>
       </View>
     );
@@ -151,21 +179,12 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     paddingHorizontal: 14,
     borderRadius: RADIUS.full,
-    backgroundColor: PALETTE.surfaceAlt,
     gap: 6,
-  },
-  typeChipActive: {
-    backgroundColor: PALETTE.surfaceInverse,
   },
   typeText: {
     ...TYPOGRAPHY.labelMd,
-    color: PALETTE.onSurfaceVariant,
-  },
-  typeTextActive: {
-    color: PALETTE.onInverse,
   },
   limePrimaryButton: {
-    backgroundColor: PALETTE.primary,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -175,7 +194,6 @@ const styles = StyleSheet.create({
   },
   limePrimaryText: {
     fontFamily: FONT_FAMILY.displaySemiBold,
-    color: PALETTE.onPrimary,
     fontSize: 15,
     letterSpacing: -0.15,
   },
@@ -184,7 +202,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   inkPrimaryButton: {
-    backgroundColor: PALETTE.surfaceInverse,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -195,7 +212,6 @@ const styles = StyleSheet.create({
   },
   inkPrimaryText: {
     fontFamily: FONT_FAMILY.displaySemiBold,
-    color: PALETTE.onInverse,
     fontSize: 15,
     letterSpacing: -0.15,
   },
@@ -206,7 +222,6 @@ const styles = StyleSheet.create({
   },
   inkSecondaryButton: {
     flex: 1,
-    backgroundColor: PALETTE.surfaceInverse,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -216,7 +231,6 @@ const styles = StyleSheet.create({
   },
   limeResumeButton: {
     flex: 1.4,
-    backgroundColor: PALETTE.primary,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',

@@ -14,14 +14,17 @@ import {
   BarChart2,
   Footprints,
   Music,
-  Play,
+  SlidersHorizontal,
 } from 'lucide-react-native';
-import { FONT_FAMILY, PALETTE, RADIUS, SPACING, TYPOGRAPHY } from '@/constants/Colors';
+import { FONT_FAMILY, RADIUS, SPACING, TYPOGRAPHY } from '@/constants/Colors';
 import { getWorkoutStats, getAllWorkouts } from '@/services/database/workout-repo';
 import { WorkoutRecord, WorkoutStats } from '@/types/workout';
 import { formatDuration, formatSteps } from '@/services/location/metrics';
 import { RunnerMiniPlayer } from '@/components/spotify/RunnerMiniPlayer';
 import { useSpotifyAuth } from '@/hooks/useSpotifyAuth';
+import { usePreferences } from '@/context/AppPreferencesContext';
+import { useAppUpdates } from '@/hooks/useAppUpdates';
+import { PreferencesModal } from '@/components/ui/PreferencesModal';
 import {
   ActivityRowCard,
   IconCircleButton,
@@ -29,11 +32,12 @@ import {
   TopAppBar,
 } from '@/components/ui/EditorialPrimitives';
 
-const DAY_INITIALS = ['M', 'S', 'S', 'R', 'K', 'J', 'S'];
-
 export default function HomeScreen() {
   const router = useRouter();
   const { user } = useSpotifyAuth();
+  const { palette, isDark, t } = usePreferences();
+  const { isUpdatePending } = useAppUpdates();
+  const [preferencesVisible, setPreferencesVisible] = useState(false);
   const [stats, setStats] = useState<WorkoutStats>({
     totalDistanceMeters: 0,
     totalDurationSeconds: 0,
@@ -87,7 +91,7 @@ export default function HomeScreen() {
       const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
       days.push({
         key,
-        label: DAY_INITIALS[d.getDay()],
+        label: t.weekdaysShort[d.getDay()],
         km: 0,
         isToday: i === 0,
       });
@@ -128,219 +132,282 @@ export default function HomeScreen() {
       weeklyKm: (totalWeekMeters / 1000).toFixed(1),
       weeklySessions: totalWeekCount,
     };
-  }, [allWorkouts]);
+  }, [allWorkouts, t.weekdaysShort]);
 
   const totalKm = (stats.totalDistanceMeters / 1000).toFixed(1);
+  const darkSurfaceBorder = isDark ? { borderWidth: 1, borderColor: palette.border } : undefined;
 
   return (
-    <ScrollView
-      style={styles.container}
-      contentContainerStyle={styles.content}
-      showsVerticalScrollIndicator={false}
-      refreshControl={
-        <RefreshControl
-          refreshing={refreshing}
-          onRefresh={onRefresh}
-          tintColor={PALETTE.accent}
-        />
-      }
-    >
-      {/* Editorial Top App Bar */}
-      <TopAppBar
-        kicker="WALK THE TALK · OVERVIEW"
-        title={user?.display_name ? `Halo, ${user.display_name}` : 'Siap Berolahraga'}
-        avatarUrl={user?.images?.[0]?.url}
-        rightActions={
-          <>
-            <IconCircleButton
-              accessibilityLabel="Buka pemutar Spotify"
-              icon={<Music size={18} strokeWidth={2} color={PALETTE.onSurface} />}
-              onPress={() => router.push('/music' as any)}
-            />
-            <IconCircleButton
-              accessibilityLabel="Mulai rekam lari"
-              icon={<Play size={18} strokeWidth={2} color={PALETTE.onSurface} />}
-              onPress={() => router.push('/record' as any)}
-            />
-          </>
+    <View style={[styles.container, { backgroundColor: palette.surface }]}>
+      <ScrollView
+        style={[styles.container, { backgroundColor: palette.surface }]}
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={palette.accent}
+          />
         }
-      />
+      >
+        {/* Editorial Top App Bar */}
+        <TopAppBar
+          kicker={t.home.kicker}
+          title={
+            user?.display_name
+              ? t.home.greetingNamed(user.display_name)
+              : t.home.greetingDefault
+          }
+          avatarUrl={user?.images?.[0]?.url}
+          rightActions={
+            <>
+              <IconCircleButton
+                accessibilityLabel={t.home.openSpotifyA11y}
+                icon={<Music size={18} strokeWidth={2} color={palette.onSurface} />}
+                onPress={() => router.push('/music' as any)}
+              />
+              <IconCircleButton
+                accessibilityLabel={t.home.openPreferencesA11y}
+                showBadgeDot={isUpdatePending}
+                icon={
+                  <SlidersHorizontal size={18} strokeWidth={2} color={palette.onSurface} />
+                }
+                onPress={() => setPreferencesVisible(true)}
+              />
+            </>
+          }
+        />
 
-      <View style={styles.bodyPadding}>
-        {/* Hero Data Strip + 7-Day Activity Bar Chart */}
-        <View style={styles.dataStripCard}>
-          <View style={styles.stripHeaderRow}>
-            <KickerText>TOTAL JARAK TERCATAT</KickerText>
-            <View style={styles.sessionChip}>
-              <Text style={styles.sessionChipText}>{stats.totalWorkouts} SESI</Text>
+        <View style={styles.bodyPadding}>
+          {/* Hero Data Strip + 7-Day Activity Bar Chart */}
+          <View
+            style={[
+              styles.dataStripCard,
+              { backgroundColor: palette.surfaceAlt },
+              darkSurfaceBorder,
+            ]}
+          >
+            <View style={styles.stripHeaderRow}>
+              <KickerText>{t.home.totalDistanceLabel}</KickerText>
+              <View style={[styles.sessionChip, { backgroundColor: palette.actionPrimary }]}>
+                <Text style={[styles.sessionChipText, { color: palette.onActionPrimary }]}>
+                  {t.home.sessionsCount(stats.totalWorkouts)}
+                </Text>
+              </View>
             </View>
-          </View>
 
-          <View style={styles.heroMetricRow}>
-            <Text style={styles.heroNumeral} numberOfLines={1} adjustsFontSizeToFit>
-              {totalKm}
-            </Text>
-            <Text style={styles.heroUnit}>KM</Text>
-          </View>
-
-          <View style={styles.hairline} />
-
-          <View style={styles.subMetricsRow}>
-            <View style={styles.subMetricCell}>
-              <KickerText style={styles.microLabel}>DURASI</KickerText>
-              <Text style={styles.subNumeral}>
-                {formatDuration(stats.totalDurationSeconds)}
+            <View style={styles.heroMetricRow}>
+              <Text
+                style={[styles.heroNumeral, { color: palette.accent }]}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+              >
+                {totalKm}
+              </Text>
+              <Text style={[styles.heroUnit, { color: palette.onSurfaceVariant }]}>
+                {t.common.kmUnit.toUpperCase()}
               </Text>
             </View>
 
-            <View style={styles.subMetricCell}>
-              <KickerText style={styles.microLabel}>KALORI</KickerText>
-              <Text style={styles.subNumeral}>{stats.totalCaloriesKcal}</Text>
-            </View>
+            <View style={[styles.hairline, { backgroundColor: palette.border }]} />
 
-            <View style={styles.subMetricCell}>
-              <KickerText style={styles.microLabel}>LANGKAH</KickerText>
-              <Text style={styles.subNumeral}>{formatSteps(stats.totalSteps)}</Text>
-            </View>
-
-            <View style={styles.subMetricCell}>
-              <KickerText style={styles.microLabel}>7 HARI</KickerText>
-              <Text style={styles.subNumeral}>{weeklyKm} km</Text>
-            </View>
-          </View>
-
-          <View style={styles.hairline} />
-
-          {/* 7-Day Vertical Bar Strip */}
-          <View style={styles.barsRow}>
-            {weeklyBars.map((bar) => (
-              <View key={bar.key} style={styles.barCol}>
-                <View style={styles.barTrack}>
-                  <View
-                    style={[
-                      styles.barFill,
-                      bar.km > 0
-                        ? {
-                            height: `${Math.round(bar.ratio * 100)}%`,
-                            backgroundColor: PALETTE.surfaceInverse,
-                          }
-                        : {
-                            height: 4,
-                            backgroundColor: PALETTE.neutralSoft,
-                          },
-                    ]}
-                  />
-                </View>
-                <Text
-                  style={[
-                    styles.barLabel,
-                    bar.isToday && { color: PALETTE.onSurface },
-                  ]}
-                >
-                  {bar.label}
+            <View style={styles.subMetricsRow}>
+              <View style={styles.subMetricCell}>
+                <KickerText style={styles.microLabel}>{t.home.durationLabel}</KickerText>
+                <Text style={[styles.subNumeral, { color: palette.onSurface }]}>
+                  {formatDuration(stats.totalDurationSeconds)}
                 </Text>
               </View>
-            ))}
-          </View>
-        </View>
 
-        {/* 2-Column Bento Tiles: Single Lime Tile + Paper-Alt Summary Tile */}
-        <View style={styles.bentoGrid}>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Mulai sesi lari baru"
-            onPress={() => router.push('/record' as any)}
-            style={({ pressed }) => [
-              styles.limeTile,
-              pressed && { backgroundColor: PALETTE.primaryDeep },
-            ]}
-          >
-            <View style={styles.tileTopRow}>
-              <Footprints size={18} strokeWidth={2} color={PALETTE.onPrimary} />
-              <KickerText style={{ color: 'rgba(14, 15, 12, 0.6)' }}>SESI BARU</KickerText>
+              <View style={styles.subMetricCell}>
+                <KickerText style={styles.microLabel}>{t.home.caloriesLabel}</KickerText>
+                <Text style={[styles.subNumeral, { color: palette.onSurface }]}>
+                  {stats.totalCaloriesKcal}
+                </Text>
+              </View>
+
+              <View style={styles.subMetricCell}>
+                <KickerText style={styles.microLabel}>{t.home.stepsLabel}</KickerText>
+                <Text style={[styles.subNumeral, { color: palette.onSurface }]}>
+                  {formatSteps(stats.totalSteps)}
+                </Text>
+              </View>
+
+              <View style={styles.subMetricCell}>
+                <KickerText style={styles.microLabel}>{t.home.sevenDaysLabel}</KickerText>
+                <Text style={[styles.subNumeral, { color: palette.onSurface }]}>
+                  {weeklyKm} {t.common.kmUnit}
+                </Text>
+              </View>
             </View>
+
+            <View style={[styles.hairline, { backgroundColor: palette.border }]} />
+
+            {/* 7-Day Vertical Bar Strip */}
+            <View style={styles.barsRow}>
+              {weeklyBars.map((bar) => (
+                <View key={bar.key} style={styles.barCol}>
+                  <View style={styles.barTrack}>
+                    <View
+                      style={[
+                        styles.barFill,
+                        bar.km > 0
+                          ? {
+                              height: `${Math.round(bar.ratio * 100)}%`,
+                              backgroundColor: palette.actionPrimary,
+                            }
+                          : {
+                              height: 4,
+                              backgroundColor: palette.neutralSoft,
+                            },
+                      ]}
+                    />
+                  </View>
+                  <Text
+                    style={[
+                      styles.barLabel,
+                      { color: bar.isToday ? palette.onSurface : palette.onSurfaceVariant },
+                    ]}
+                  >
+                    {bar.label}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          </View>
+
+          {/* 2-Column Bento Tiles: Single Lime Tile + Paper-Alt Summary Tile */}
+          <View style={styles.bentoGrid}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={t.home.startRunA11y}
+              onPress={() => router.push('/record' as any)}
+              style={({ pressed }) => [
+                styles.limeTile,
+                { backgroundColor: pressed ? palette.primaryDeep : palette.primary },
+              ]}
+            >
+              <View style={styles.tileTopRow}>
+                <Footprints size={18} strokeWidth={2} color={palette.onPrimary} />
+                <KickerText style={{ color: 'rgba(14, 15, 12, 0.6)' }}>
+                  {t.home.newSessionKicker}
+                </KickerText>
+              </View>
+              <View>
+                <Text style={[styles.limeTileTitle, { color: palette.onPrimary }]}>
+                  {t.home.startRunTitle}
+                </Text>
+                <View style={styles.tileBottomRow}>
+                  <Text style={styles.limeTileSub}>{t.home.startRunSub}</Text>
+                  <ArrowUpRight size={14} strokeWidth={2} color={palette.onPrimary} />
+                </View>
+              </View>
+            </Pressable>
+
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={t.home.thisWeekA11y}
+              onPress={() => router.push('/history' as any)}
+              style={({ pressed }) => [
+                styles.paperTile,
+                { backgroundColor: palette.surfaceAlt },
+                darkSurfaceBorder,
+                pressed && { opacity: 0.8 },
+              ]}
+            >
+              <View style={styles.tileTopRow}>
+                <BarChart2 size={18} strokeWidth={2} color={palette.onSurface} />
+                <KickerText>{t.home.thisWeekKicker}</KickerText>
+              </View>
+              <View>
+                <View style={styles.tileStatRow}>
+                  <Text style={[styles.tileStatNumeral, { color: palette.onSurface }]}>
+                    {weeklySessions}
+                  </Text>
+                  <Text style={[styles.tileStatUnit, { color: palette.onSurfaceVariant }]}>
+                    {t.common.sessionsUnit}
+                  </Text>
+                </View>
+                <View style={styles.tileBottomRow}>
+                  <Text style={[styles.tileSubMuted, { color: palette.onSurfaceVariant }]}>
+                    {t.home.thisWeekRecorded(weeklyKm)}
+                  </Text>
+                  <ArrowUpRight size={14} strokeWidth={2} color={palette.onSurface} />
+                </View>
+              </View>
+            </Pressable>
+          </View>
+
+          {/* Dark Ink Spotify Runner Mini Player */}
+          <View style={styles.miniPlayerWrap}>
+            <RunnerMiniPlayer />
+          </View>
+
+          {/* Recent Activities Section */}
+          <View style={styles.sectionHeader}>
             <View>
-              <Text style={styles.limeTileTitle}>Mulai Lari</Text>
-              <View style={styles.tileBottomRow}>
-                <Text style={styles.limeTileSub}>GPS · Pace · Splits</Text>
-                <ArrowUpRight size={14} strokeWidth={2} color={PALETTE.onPrimary} />
-              </View>
+              <KickerText>{t.home.recentLogKicker}</KickerText>
+              <Text style={[styles.sectionTitle, { color: palette.onSurface }]}>
+                {t.home.recentTitle}
+              </Text>
             </View>
-          </Pressable>
-
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Lihat ringkasan mingguan"
-            onPress={() => router.push('/history' as any)}
-            style={({ pressed }) => [
-              styles.paperTile,
-              pressed && { opacity: 0.8 },
-            ]}
-          >
-            <View style={styles.tileTopRow}>
-              <BarChart2 size={18} strokeWidth={2} color={PALETTE.onSurface} />
-              <KickerText>MINGGU INI</KickerText>
-            </View>
-            <View>
-              <View style={styles.tileStatRow}>
-                <Text style={styles.tileStatNumeral}>{weeklySessions}</Text>
-                <Text style={styles.tileStatUnit}>sesi</Text>
-              </View>
-              <View style={styles.tileBottomRow}>
-                <Text style={styles.tileSubMuted}>{weeklyKm} km tercatat</Text>
-                <ArrowUpRight size={14} strokeWidth={2} color={PALETTE.onSurface} />
-              </View>
-            </View>
-          </Pressable>
-        </View>
-
-        {/* Dark Ink Spotify Runner Mini Player */}
-        <View style={styles.miniPlayerWrap}>
-          <RunnerMiniPlayer />
-        </View>
-
-        {/* Recent Activities Section */}
-        <View style={styles.sectionHeader}>
-          <View>
-            <KickerText>LOG TERBARU</KickerText>
-            <Text style={styles.sectionTitle}>Aktivitas Terbaru</Text>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => router.push('/history' as any)}
+              style={({ pressed }) => [
+                styles.seeAllPill,
+                { backgroundColor: palette.surfaceAlt },
+                darkSurfaceBorder,
+                pressed && { opacity: 0.72 },
+              ]}
+            >
+              <Text style={[styles.seeAllText, { color: palette.onSurface }]}>
+                {t.common.all}
+              </Text>
+            </Pressable>
           </View>
-          <Pressable
-            accessibilityRole="button"
-            onPress={() => router.push('/history' as any)}
-            style={({ pressed }) => [styles.seeAllPill, pressed && { opacity: 0.72 }]}
-          >
-            <Text style={styles.seeAllText}>Semua</Text>
-          </Pressable>
-        </View>
 
-        {recentWorkouts.length === 0 ? (
-          <View style={styles.emptyCard}>
-            <Activity size={28} strokeWidth={2} color={PALETTE.onSurfaceVariant} />
-            <Text style={styles.emptyTitle}>Belum ada aktivitas tercatat</Text>
-            <Text style={styles.emptyDesc}>
-              Tekan kartu Mulai Lari atau tombol + di bar bawah untuk memulai sesi pertamamu.
-            </Text>
-          </View>
-        ) : (
-          recentWorkouts.map((workout) => (
-            <ActivityRowCard
-              key={workout.id}
-              workout={workout}
-              dateFormat="short"
-              onPress={() => router.push(`/workout/${workout.id}` as any)}
-            />
-          ))
-        )}
-      </View>
-    </ScrollView>
+          {recentWorkouts.length === 0 ? (
+            <View
+              style={[
+                styles.emptyCard,
+                { backgroundColor: palette.surfaceAlt },
+                darkSurfaceBorder,
+              ]}
+            >
+              <Activity size={28} strokeWidth={2} color={palette.onSurfaceVariant} />
+              <Text style={[styles.emptyTitle, { color: palette.onSurface }]}>
+                {t.home.emptyTitle}
+              </Text>
+              <Text style={[styles.emptyDesc, { color: palette.onSurfaceVariant }]}>
+                {t.home.emptyDesc}
+              </Text>
+            </View>
+          ) : (
+            recentWorkouts.map((workout) => (
+              <ActivityRowCard
+                key={workout.id}
+                workout={workout}
+                dateFormat="short"
+                onPress={() => router.push(`/workout/${workout.id}` as any)}
+              />
+            ))
+          )}
+        </View>
+      </ScrollView>
+
+      <PreferencesModal
+        visible={preferencesVisible}
+        onClose={() => setPreferencesVisible(false)}
+      />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: PALETTE.surface,
   },
   content: {
     paddingBottom: 112,
@@ -349,7 +416,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: SPACING.gutter,
   },
   dataStripCard: {
-    backgroundColor: PALETTE.surfaceAlt,
     borderRadius: RADIUS.lg,
     borderCurve: 'continuous',
     padding: SPACING.cardPadding,
@@ -361,14 +427,12 @@ const styles = StyleSheet.create({
     marginBottom: SPACING.sm,
   },
   sessionChip: {
-    backgroundColor: PALETTE.surfaceInverse,
     borderRadius: RADIUS.full,
     paddingHorizontal: 10,
     paddingVertical: 4,
   },
   sessionChipText: {
     ...TYPOGRAPHY.caption,
-    color: PALETTE.onInverse,
   },
   heroMetricRow: {
     flexDirection: 'row',
@@ -377,15 +441,12 @@ const styles = StyleSheet.create({
   },
   heroNumeral: {
     ...TYPOGRAPHY.displayHero,
-    color: PALETTE.accent,
   },
   heroUnit: {
     ...TYPOGRAPHY.headlineMd,
-    color: PALETTE.onSurfaceVariant,
   },
   hairline: {
     height: 1,
-    backgroundColor: PALETTE.border,
     marginVertical: SPACING.lg,
   },
   subMetricsRow: {
@@ -401,7 +462,6 @@ const styles = StyleSheet.create({
   },
   subNumeral: {
     ...TYPOGRAPHY.numeralIdle,
-    color: PALETTE.onSurface,
   },
   barsRow: {
     flexDirection: 'row',
@@ -430,7 +490,6 @@ const styles = StyleSheet.create({
   },
   barLabel: {
     ...TYPOGRAPHY.caption,
-    color: PALETTE.onSurfaceVariant,
   },
   bentoGrid: {
     flexDirection: 'row',
@@ -439,7 +498,6 @@ const styles = StyleSheet.create({
   },
   limeTile: {
     flex: 1,
-    backgroundColor: PALETTE.primary,
     borderRadius: RADIUS.lg,
     borderCurve: 'continuous',
     padding: SPACING.tilePadding,
@@ -448,7 +506,6 @@ const styles = StyleSheet.create({
   },
   paperTile: {
     flex: 1,
-    backgroundColor: PALETTE.surfaceAlt,
     borderRadius: RADIUS.lg,
     borderCurve: 'continuous',
     padding: SPACING.tilePadding,
@@ -465,7 +522,6 @@ const styles = StyleSheet.create({
     fontSize: 24,
     lineHeight: 26,
     letterSpacing: -0.72,
-    color: PALETTE.onPrimary,
   },
   limeTileSub: {
     ...TYPOGRAPHY.labelSm,
@@ -484,15 +540,12 @@ const styles = StyleSheet.create({
   },
   tileStatNumeral: {
     ...TYPOGRAPHY.displayMd,
-    color: PALETTE.onSurface,
   },
   tileStatUnit: {
     ...TYPOGRAPHY.bodySm,
-    color: PALETTE.onSurfaceVariant,
   },
   tileSubMuted: {
     ...TYPOGRAPHY.labelSm,
-    color: PALETTE.onSurfaceVariant,
   },
   miniPlayerWrap: {
     marginTop: SPACING.md,
@@ -506,21 +559,17 @@ const styles = StyleSheet.create({
   },
   sectionTitle: {
     ...TYPOGRAPHY.headlineSm,
-    color: PALETTE.onSurface,
     marginTop: 2,
   },
   seeAllPill: {
-    backgroundColor: PALETTE.surfaceAlt,
     borderRadius: RADIUS.full,
     paddingHorizontal: 12,
     paddingVertical: 6,
   },
   seeAllText: {
     ...TYPOGRAPHY.labelSm,
-    color: PALETTE.onSurface,
   },
   emptyCard: {
-    backgroundColor: PALETTE.surfaceAlt,
     borderRadius: RADIUS.lg,
     borderCurve: 'continuous',
     padding: SPACING.xxl,
@@ -528,12 +577,10 @@ const styles = StyleSheet.create({
   },
   emptyTitle: {
     ...TYPOGRAPHY.headlineSm,
-    color: PALETTE.onSurface,
     marginTop: SPACING.md,
   },
   emptyDesc: {
     ...TYPOGRAPHY.bodySm,
-    color: PALETTE.onSurfaceVariant,
     textAlign: 'center',
     marginTop: 6,
   },

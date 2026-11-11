@@ -14,6 +14,7 @@ import {
   loginWithSpotify,
 } from '@/services/spotify/auth';
 import { getCurrentUser } from '@/services/spotify/player';
+import { getActiveLanguage, getTranslations } from '@/constants/i18n';
 import { SpotifyUser } from '@/types/spotify';
 
 interface SpotifyAuthContextValue {
@@ -69,7 +70,9 @@ export function SpotifyAuthProvider({
       }
     } catch (err: any) {
       if (isMountedRef.current) {
-        setError(err.message || 'Gagal memeriksa status login Spotify.');
+        setError(
+          err.message || getTranslations(getActiveLanguage()).spotifyErrors.checkAuthFailed
+        );
       }
     } finally {
       if (isMountedRef.current) {
@@ -106,7 +109,9 @@ export function SpotifyAuthProvider({
         }
       } catch (err: any) {
         if (isMountedRef.current) {
-          setError(err.message || 'Gagal memeriksa status login Spotify.');
+          setError(
+            err.message || getTranslations(getActiveLanguage()).spotifyErrors.checkAuthFailed
+          );
         }
       } finally {
         if (isMountedRef.current) {
@@ -134,7 +139,7 @@ export function SpotifyAuthProvider({
     } catch (err: any) {
       if (isMountedRef.current) {
         setError(
-          err.message || 'Login Spotify dibatalkan atau terjadi kesalahan.'
+          err.message || getTranslations(getActiveLanguage()).spotifyErrors.loginCanceled
         );
       }
       return false;
@@ -158,7 +163,8 @@ export function SpotifyAuthProvider({
         }
         return { success: true };
       } catch (err: any) {
-        const msg = err.message || 'Gagal menyelesaikan login Spotify.';
+        const msg =
+          err.message || getTranslations(getActiveLanguage()).spotifyErrors.loginCanceled;
         if (isMountedRef.current) {
           setError(msg);
         }
@@ -182,7 +188,9 @@ export function SpotifyAuthProvider({
       await clearTokens();
     } catch (err: any) {
       if (isMountedRef.current) {
-        setError(err.message || 'Gagal keluar dari Spotify.');
+        setError(
+          err.message || getTranslations(getActiveLanguage()).spotifyErrors.logoutFailed
+        );
       }
     } finally {
       if (isMountedRef.current) {
