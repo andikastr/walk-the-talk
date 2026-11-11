@@ -15,7 +15,12 @@ import { WorkoutRecord } from '@/types/workout';
 import { WorkoutMap } from '@/components/map/WorkoutMap';
 import { SplitsTable } from '@/components/workout/SplitsTable';
 import { ShareWorkoutModal } from '@/components/workout/ShareWorkoutModal';
-import { formatDuration, formatPace, formatSteps } from '@/services/location/metrics';
+import {
+  formatDuration,
+  formatElevationMeters,
+  formatPace,
+  formatSteps,
+} from '@/services/location/metrics';
 import { FONT_FAMILY, RADIUS, SPACING, TYPOGRAPHY } from '@/constants/Colors';
 import { getActivityLabel } from '@/constants/i18n';
 import { usePreferences } from '@/context/AppPreferencesContext';
@@ -115,7 +120,7 @@ export default function WorkoutDetailScreen() {
       contentContainerStyle={styles.content}
       showsVerticalScrollIndicator={false}
     >
-      {/* Rounded Map Route Card */}
+      {/* Rounded Map Route Card (or Indoor Summary Banner when GPS-free) */}
       <View style={styles.mapWrapper}>
         <View
           style={[
@@ -124,21 +129,54 @@ export default function WorkoutDetailScreen() {
             darkSurfaceBorder,
           ]}
         >
-          <WorkoutMap
-            currentLocation={centerCoord}
-            routeCoordinates={workout.routePoints}
-            isTracking={false}
-          />
+          {workout.isIndoor && workout.routePoints.length === 0 ? (
+            <View style={styles.indoorBanner}>
+              <View
+                style={[
+                  styles.indoorIconBadge,
+                  { backgroundColor: palette.surfaceRaised },
+                  darkSurfaceBorder,
+                ]}
+              >
+                <Footprints size={28} strokeWidth={2} color={palette.accent} />
+              </View>
+              <KickerText>{t.record.indoorCardKicker}</KickerText>
+              <Text style={[styles.indoorBannerTitle, { color: palette.onSurface }]}>
+                {t.record.indoorCardHeading}
+              </Text>
+            </View>
+          ) : (
+            <WorkoutMap
+              currentLocation={centerCoord}
+              routeCoordinates={workout.routePoints}
+              isTracking={false}
+            />
+          )}
         </View>
       </View>
 
       {/* Editorial Title & Type Chip */}
       <View style={styles.headerBox}>
-        <View style={[styles.typeChip, { backgroundColor: palette.actionPrimary }]}>
-          {renderBadgeIcon()}
-          <Text style={[styles.typeChipText, { color: palette.onActionPrimary }]}>
-            {typeLabel}
-          </Text>
+        <View style={styles.chipsRow}>
+          <View style={[styles.typeChip, { backgroundColor: palette.actionPrimary }]}>
+            {renderBadgeIcon()}
+            <Text style={[styles.typeChipText, { color: palette.onActionPrimary }]}>
+              {typeLabel}
+            </Text>
+          </View>
+          {workout.isIndoor && (
+            <View
+              style={[
+                styles.indoorChip,
+                { backgroundColor: palette.surfaceAlt },
+                darkSurfaceBorder,
+              ]}
+            >
+              <Text style={[styles.indoorChipText, { color: palette.onSurfaceVariant }]}>
+                {t.workoutDetail.indoorBadge}
+              </Text>
+            </View>
+          )}
         </View>
 
         <Text style={[styles.title, { color: palette.onSurface }]}>{workout.title}</Text>
@@ -212,6 +250,19 @@ export default function WorkoutDetailScreen() {
               {workout.avgCadenceSpm ?? 0} {t.common.spmUnit}
             </Text>
           </View>
+          {!workout.isIndoor && (
+            <>
+              <View style={[styles.statDivider, { backgroundColor: palette.border }]} />
+              <View style={styles.subStat}>
+                <KickerText style={{ marginBottom: 4 }}>
+                  {t.workoutDetail.elevationKicker}
+                </KickerText>
+                <Text style={[styles.subStatVal, { color: palette.onSurface }]}>
+                  {formatElevationMeters(workout.elevationGainMeters ?? 0)}
+                </Text>
+              </View>
+            </>
+          )}
         </View>
       </View>
 
@@ -333,9 +384,34 @@ const styles = StyleSheet.create({
     borderCurve: 'continuous',
     overflow: 'hidden',
   },
+  indoorBanner: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: SPACING.xl,
+    gap: 8,
+  },
+  indoorIconBadge: {
+    width: 58,
+    height: 58,
+    borderRadius: RADIUS.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 4,
+  },
+  indoorBannerTitle: {
+    ...TYPOGRAPHY.headlineSm,
+    textAlign: 'center',
+  },
   headerBox: {
     paddingHorizontal: SPACING.gutter,
     marginBottom: SPACING.xl,
+  },
+  chipsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: SPACING.md,
   },
   typeChip: {
     flexDirection: 'row',
@@ -345,7 +421,14 @@ const styles = StyleSheet.create({
     borderRadius: RADIUS.full,
     alignSelf: 'flex-start',
     gap: 5,
-    marginBottom: SPACING.md,
+  },
+  indoorChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: RADIUS.full,
+  },
+  indoorChipText: {
+    ...TYPOGRAPHY.caption,
   },
   typeChipText: {
     ...TYPOGRAPHY.caption,

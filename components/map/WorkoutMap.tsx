@@ -137,13 +137,15 @@ function buildLeafletHtml(
         if (!payload) return;
         var loc = payload.currentLocation;
         var coords = payload.routeCoordinates || [];
+        var segments = payload.routeSegments || [];
+        var drawableSegments = segments.filter(function (seg) { return seg.length > 1; });
         var isTracking = !!payload.isTracking;
         var forceFit = !!payload.forceFit;
 
-        // Route Polyline
-        if (coords.length > 1) {
+        // Route Polyline (supports multi-segment breaks so pause gaps never connect straight across)
+        if (drawableSegments.length > 0) {
           if (!routeLine) {
-            routeLine = L.polyline(coords, {
+            routeLine = L.polyline(drawableSegments, {
               color: '${palette.accent}',
               weight: 5,
               opacity: 0.96,
@@ -151,7 +153,7 @@ function buildLeafletHtml(
               lineJoin: 'round'
             }).addTo(map);
           } else {
-            routeLine.setLatLngs(coords);
+            routeLine.setLatLngs(drawableSegments);
           }
         } else if (routeLine) {
           map.removeLayer(routeLine);
@@ -289,15 +291,32 @@ export function WorkoutMap({ currentLocation, routeCoordinates, isTracking }: Wo
     return { html, baseUrl: 'https://walkthetalk.app' };
   }, [initialAnchor, isDark, palette, language]);
 
-  const latestPayload = useMemo(
-    () => ({
+  const latestPayload = useMemo(() => {
+    const flatCoords: [number, number][] = [];
+    const routeSegments: [number, number][][] = [];
+    let activeSegIndex: number | null = null;
+
+    for (const pt of routeCoordinates) {
+      const segIdx = pt.segmentIndex ?? 0;
+      const pair: [number, number] = [pt.latitude, pt.longitude];
+      flatCoords.push(pair);
+
+      if (activeSegIndex === null || segIdx !== activeSegIndex) {
+        routeSegments.push([pair]);
+        activeSegIndex = segIdx;
+      } else {
+        routeSegments[routeSegments.length - 1].push(pair);
+      }
+    }
+
+    return {
       currentLocation,
-      routeCoordinates: routeCoordinates.map((c) => [c.latitude, c.longitude] as [number, number]),
+      routeCoordinates: flatCoords,
+      routeSegments,
       isTracking: Boolean(isTracking),
       forceFit: false,
-    }),
-    [currentLocation, routeCoordinates, isTracking]
-  );
+    };
+  }, [currentLocation, routeCoordinates, isTracking]);
 
   const latestPayloadRef = useRef(latestPayload);
 

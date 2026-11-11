@@ -1,4 +1,9 @@
-import { GPSCoordinate, WorkoutSplit, WorkoutType } from '@/types/workout';
+import {
+  GPSCoordinate,
+  GpsSignalQuality,
+  WorkoutSplit,
+  WorkoutType,
+} from '@/types/workout';
 import { WORKOUT_CONFIG } from '@/constants/Config';
 
 // Radius bumi dalam meter
@@ -35,7 +40,10 @@ export function calculateTotalDistance(coordinates: GPSCoordinate[]): number {
   if (coordinates.length < 2) return 0;
   let totalDistance = 0;
   for (let i = 1; i < coordinates.length; i++) {
-    totalDistance += calculateHaversineDistance(coordinates[i - 1], coordinates[i]);
+    const prev = coordinates[i - 1];
+    const curr = coordinates[i];
+    if ((curr.segmentIndex ?? 0) !== (prev.segmentIndex ?? 0)) continue;
+    totalDistance += calculateHaversineDistance(prev, curr);
   }
   return totalDistance;
 }
@@ -117,24 +125,28 @@ export function calculateSplits(coordinates: GPSCoordinate[]): WorkoutSplit[] {
   const splits: WorkoutSplit[] = [];
   let accumulatedDistance = 0;
   let lastKmIndex = 0;
-  let splitStartTime = coordinates[0].timestamp;
+  let splitActiveSeconds = 0;
 
   for (let i = 1; i < coordinates.length; i++) {
     const prev = coordinates[i - 1];
     const curr = coordinates[i];
+    if ((curr.segmentIndex ?? 0) !== (prev.segmentIndex ?? 0)) continue;
+
     const d = calculateHaversineDistance(prev, curr);
+    const dtSec = Math.max(0, (curr.timestamp - prev.timestamp) / 1000);
     accumulatedDistance += d;
+    splitActiveSeconds += dtSec;
 
     const currentKm = Math.floor(accumulatedDistance / 1000);
     if (currentKm > lastKmIndex) {
-      const splitDurationSec = Math.max(1, (curr.timestamp - splitStartTime) / 1000);
+      const dur = Math.max(1, Math.round(splitActiveSeconds));
       splits.push({
         kmNumber: currentKm,
-        durationSeconds: splitDurationSec,
-        paceSecondsPerKm: splitDurationSec, // 1 km jarak = split duration
+        durationSeconds: dur,
+        paceSecondsPerKm: dur,
       });
       lastKmIndex = currentKm;
-      splitStartTime = curr.timestamp;
+      splitActiveSeconds = 0;
     }
   }
 
@@ -146,12 +158,39 @@ export function calculateSplits(coordinates: GPSCoordinate[]): WorkoutSplit[] {
  */
 export function estimateStepsFromDistance(
   distanceMeters: number,
-  type: WorkoutType = 'walk'
+  type: WorkoutType = 'walk',
+  customStrideMeters?: number
 ): number {
   if (!Number.isFinite(distanceMeters) || distanceMeters <= 0) return 0;
   const strideMeters =
-    WORKOUT_CONFIG.strideMetersByType[type] || WORKOUT_CONFIG.strideMetersByType.walk;
+    customStrideMeters && customStrideMeters > 0
+      ? customStrideMeters
+      : WORKOUT_CONFIG.strideMetersByType[type] || WORKOUT_CONFIG.strideMetersByType.walk;
   return Math.max(0, Math.round(distanceMeters / strideMeters));
+}
+
+/**
+ * Klasifikasi kualitas sinyal akurasi GPS (meter)
+ */
+export function classifyGpsAccuracy(accuracy?: number | null): GpsSignalQuality {
+  if (accuracy == null || !Number.isFinite(accuracy) || accuracy <= 0) {
+    return 'acquiring';
+  }
+  if (accuracy <= WORKOUT_CONFIG.gpsGoodAccuracyMeters) {
+    return 'good';
+  }
+  if (accuracy <= WORKOUT_CONFIG.gpsMaxAccuracyMeters) {
+    return 'weak';
+  }
+  return 'acquiring';
+}
+
+/**
+ * Format elevasi menanjak dalam meter (contoh: "42 m")
+ */
+export function formatElevationMeters(elevationMeters: number): string {
+  if (!Number.isFinite(elevationMeters) || elevationMeters <= 0) return '0 m';
+  return `${Math.round(elevationMeters)} m`;
 }
 
 /**

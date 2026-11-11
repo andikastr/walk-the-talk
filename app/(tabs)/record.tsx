@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Linking,
   Pressable,
@@ -8,7 +8,15 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { AlertTriangle, List, Map } from 'lucide-react-native';
+import {
+  AlertTriangle,
+  Footprints,
+  List,
+  Map,
+  Navigation,
+  PauseCircle,
+  Radio,
+} from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import { useWorkoutSession } from '@/hooks/useWorkoutSession';
 import { useSpotifyPlayer } from '@/hooks/useSpotifyPlayer';
@@ -19,17 +27,24 @@ import { SplitsTable } from '@/components/workout/SplitsTable';
 import { RunnerMiniPlayer } from '@/components/spotify/RunnerMiniPlayer';
 import { SaveWorkoutModal } from '@/components/workout/SaveWorkoutModal';
 import { WorkoutType } from '@/types/workout';
-import { RADIUS, SPACING, TYPOGRAPHY } from '@/constants/Colors';
+import { FONT_FAMILY, RADIUS, SPACING, TYPOGRAPHY } from '@/constants/Colors';
 import { getActivityLabel } from '@/constants/i18n';
 import { usePreferences } from '@/context/AppPreferencesContext';
 import { useAppDialog } from '@/context/AppDialogContext';
+import { formatDuration } from '@/services/location/metrics';
+import { getElapsedActiveSeconds } from '@/services/location/tracking-engine';
+import { getAppSetting, setAppSetting } from '@/services/database/workout-repo';
+
+const BG_LOCATION_PROMPTED_KEY = 'bg_location_prompted_v1';
 
 export default function RecordScreen() {
   const router = useRouter();
-  const { palette, isDark, t } = usePreferences();
+  const { palette, isDark, t, autoPauseEnabled, setAutoPauseEnabled } = usePreferences();
   const { confirm } = useAppDialog();
   const {
     status,
+    isAutoPaused,
+    trackingMode,
     workoutType,
     durationSeconds,
     distanceMeters,
@@ -38,17 +53,30 @@ export default function RecordScreen() {
     caloriesKcal,
     steps,
     avgCadenceSpm,
+    elevationGainMeters,
+    stepTrackingMode,
     routeCoordinates,
     splits,
     currentLocation,
+    gpsSignal,
+    gpsAccuracyMeters,
     hasLocationPermission,
+    hasBackgroundPermission,
+    pedometerAvailable,
+    hasPedometerPermission,
+    getStrideForType,
+    pendingRecovery,
+    setTrackingMode,
     refreshLocationPermission,
+    requestBackgroundLocationPermission,
     startWorkout,
     pauseWorkout,
     resumeWorkout,
     stopWorkout,
     resetWorkout,
     saveCurrentWorkout,
+    restorePendingWorkout,
+    dismissPendingWorkout,
   } = useWorkoutSession();
 
   const { currentTrack } = useSpotifyPlayer();
@@ -57,6 +85,41 @@ export default function RecordScreen() {
   const [viewMode, setViewMode] = useState<'map' | 'splits'>('map');
   const [saveModalVisible, setSaveModalVisible] = useState(false);
   const [workoutTitle, setWorkoutTitle] = useState('');
+  const recoveryPromptHandledRef = useRef(false);
+
+  // Tampilkan prompt pemulihan sesi bila aplikasi sempat tertutup saat sesi aktif
+  useEffect(() => {
+    if (!pendingRecovery || recoveryPromptHandledRef.current) return;
+    recoveryPromptHandledRef.current = true;
+
+    let cancelled = false;
+    (async () => {
+      const activityName = getActivityLabel(pendingRecovery.type, t);
+      const distKm = (pendingRecovery.distanceMeters / 1000).toFixed(2);
+      const durStr = formatDuration(
+        getElapsedActiveSeconds(pendingRecovery, pendingRecovery.lastSavedAt || Date.now())
+      );
+
+      const shouldResume = await confirm({
+        kicker: t.record.recoveryKicker,
+        title: t.record.recoveryTitle,
+        message: t.record.recoveryMessage(activityName, distKm, durStr),
+        cancelText: t.record.recoveryDiscard,
+        confirmText: t.record.recoveryResume,
+      });
+
+      if (cancelled) return;
+      if (shouldResume) {
+        await restorePendingWorkout();
+      } else {
+        await dismissPendingWorkout();
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [confirm, dismissPendingWorkout, pendingRecovery, restorePendingWorkout, t]);
 
   const showPermissionGuidance = async () => {
     const shouldOpenSettings = await confirm({
@@ -72,14 +135,36 @@ export default function RecordScreen() {
   };
 
   const handleStart = async () => {
-    if (hasLocationPermission !== true) {
-      const granted = await refreshLocationPermission(true);
-      if (!granted) {
-        await showPermissionGuidance();
-        return;
+    if (trackingMode === 'outdoor') {
+      if (hasLocationPermission !== true) {
+        const granted = await refreshLocationPermission(true);
+        if (!granted) {
+          await showPermissionGuidance();
+          return;
+        }
+      }
+
+      if (hasBackgroundPermission === false) {
+        const alreadyPrompted = await getAppSetting(BG_LOCATION_PROMPTED_KEY).catch(
+          () => null
+        );
+        if (alreadyPrompted !== 'true') {
+          await setAppSetting(BG_LOCATION_PROMPTED_KEY, 'true').catch(() => {});
+          const wantsBg = await confirm({
+            kicker: t.record.bgLocationKicker,
+            title: t.record.bgLocationTitle,
+            message: t.record.bgLocationMessage,
+            cancelText: t.record.bgLocationSkip,
+            confirmText: t.record.bgLocationConfirm,
+          });
+          if (wantsBg) {
+            await requestBackgroundLocationPermission();
+          }
+        }
       }
     }
-    startWorkout(selectedType);
+
+    await startWorkout(selectedType);
   };
 
   const handleStop = async () => {
@@ -94,7 +179,7 @@ export default function RecordScreen() {
 
     if (!confirmed) return;
 
-    stopWorkout();
+    await stopWorkout();
     const now = new Date();
     const hour = now.getHours();
     const timeGreeting =
@@ -125,7 +210,7 @@ export default function RecordScreen() {
 
   const handleDiscard = () => {
     setSaveModalVisible(false);
-    resetWorkout();
+    void resetWorkout();
   };
 
   const isRecordingOrPaused = status === 'recording' || status === 'paused';
@@ -135,6 +220,31 @@ export default function RecordScreen() {
       ? t.activityTypes.walkFull
       : getActivityLabel(displayedType, t);
   const darkSurfaceBorder = isDark ? { borderWidth: 1, borderColor: palette.border } : undefined;
+  const strideCm = Math.round(getStrideForType(displayedType) * 100);
+
+  const gpsDotColor =
+    gpsSignal === 'good'
+      ? palette.primaryDeep
+      : gpsSignal === 'weak'
+      ? palette.accent
+      : palette.onSurfaceVariant;
+  const gpsLabel =
+    gpsSignal === 'good' && gpsAccuracyMeters != null
+      ? t.record.gpsGood(gpsAccuracyMeters)
+      : gpsSignal === 'weak' && gpsAccuracyMeters != null
+      ? t.record.gpsWeak(gpsAccuracyMeters)
+      : t.record.gpsAcquiring;
+
+  const statusKickerText =
+    status === 'recording' && isAutoPaused
+      ? t.record.autoPausedKicker
+      : status === 'recording' && trackingMode === 'indoor'
+      ? t.record.recordingIndoorKicker
+      : status === 'recording'
+      ? t.record.recordingKicker
+      : status === 'paused'
+      ? t.record.pausedKicker
+      : t.record.idleKicker;
 
   return (
     <SafeAreaView
@@ -146,20 +256,36 @@ export default function RecordScreen() {
         <View style={styles.topBarLeft}>
           <View style={styles.statusKickerRow}>
             {status === 'recording' && (
-              <View style={[styles.recordingDot, { backgroundColor: palette.accent }]} />
+              <View
+                style={[
+                  styles.recordingDot,
+                  { backgroundColor: isAutoPaused ? palette.onSurfaceVariant : palette.accent },
+                ]}
+              />
             )}
             <Text style={[styles.topBarKicker, { color: palette.onSurfaceVariant }]}>
-              {status === 'recording'
-                ? t.record.recordingKicker
-                : status === 'paused'
-                ? t.record.pausedKicker
-                : t.record.idleKicker}
+              {statusKickerText}
             </Text>
           </View>
           <Text style={[styles.topBarTitle, { color: palette.onSurface }]}>
             {activeTypeLabel}
           </Text>
         </View>
+
+        {!isRecordingOrPaused && trackingMode === 'outdoor' && hasLocationPermission && (
+          <View
+            style={[
+              styles.signalBadge,
+              { backgroundColor: palette.surfaceAlt },
+              darkSurfaceBorder,
+            ]}
+          >
+            <Radio size={13} strokeWidth={2} color={gpsDotColor} />
+            <Text style={[styles.signalBadgeText, { color: palette.onSurface }]}>
+              {gpsLabel}
+            </Text>
+          </View>
+        )}
 
         {isRecordingOrPaused && (
           <View style={styles.modeToggleRow}>
@@ -177,13 +303,23 @@ export default function RecordScreen() {
               ]}
               onPress={() => setViewMode('map')}
             >
-              <Map
-                size={15}
-                strokeWidth={2}
-                color={
-                  viewMode === 'map' ? palette.onActionPrimary : palette.onSurfaceVariant
-                }
-              />
+              {trackingMode === 'indoor' ? (
+                <Footprints
+                  size={15}
+                  strokeWidth={2}
+                  color={
+                    viewMode === 'map' ? palette.onActionPrimary : palette.onSurfaceVariant
+                  }
+                />
+              ) : (
+                <Map
+                  size={15}
+                  strokeWidth={2}
+                  color={
+                    viewMode === 'map' ? palette.onActionPrimary : palette.onSurfaceVariant
+                  }
+                />
+              )}
               <Text
                 style={[
                   styles.modeChipText,
@@ -195,7 +331,7 @@ export default function RecordScreen() {
                   },
                 ]}
               >
-                {t.record.mapChip}
+                {trackingMode === 'indoor' ? t.record.indoorModeChip : t.record.mapChip}
               </Text>
             </Pressable>
 
@@ -238,7 +374,117 @@ export default function RecordScreen() {
         )}
       </View>
 
-      {hasLocationPermission === false && (
+      {/* Pre-Run Options Strip: Outdoor GPS / Indoor Toggle + Auto-Pause */}
+      {!isRecordingOrPaused && (
+        <View style={styles.optionsStrip}>
+          <View style={styles.optionsLeft}>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => setTrackingMode('outdoor')}
+              style={({ pressed }) => [
+                styles.optionChip,
+                {
+                  backgroundColor:
+                    trackingMode === 'outdoor' ? palette.actionPrimary : palette.surfaceAlt,
+                },
+                trackingMode !== 'outdoor' && darkSurfaceBorder,
+                pressed && { opacity: 0.78 },
+              ]}
+            >
+              <Navigation
+                size={13}
+                strokeWidth={2}
+                color={
+                  trackingMode === 'outdoor'
+                    ? palette.onActionPrimary
+                    : palette.onSurfaceVariant
+                }
+              />
+              <Text
+                style={[
+                  styles.optionChipText,
+                  {
+                    color:
+                      trackingMode === 'outdoor'
+                        ? palette.onActionPrimary
+                        : palette.onSurfaceVariant,
+                  },
+                ]}
+              >
+                {t.record.outdoorModeChip}
+              </Text>
+            </Pressable>
+
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => setTrackingMode('indoor')}
+              style={({ pressed }) => [
+                styles.optionChip,
+                {
+                  backgroundColor:
+                    trackingMode === 'indoor' ? palette.actionPrimary : palette.surfaceAlt,
+                },
+                trackingMode !== 'indoor' && darkSurfaceBorder,
+                pressed && { opacity: 0.78 },
+              ]}
+            >
+              <Footprints
+                size={13}
+                strokeWidth={2}
+                color={
+                  trackingMode === 'indoor'
+                    ? palette.onActionPrimary
+                    : palette.onSurfaceVariant
+                }
+              />
+              <Text
+                style={[
+                  styles.optionChipText,
+                  {
+                    color:
+                      trackingMode === 'indoor'
+                        ? palette.onActionPrimary
+                        : palette.onSurfaceVariant,
+                  },
+                ]}
+              >
+                {t.record.indoorModeChip}
+              </Text>
+            </Pressable>
+          </View>
+
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => void setAutoPauseEnabled(!autoPauseEnabled)}
+            style={({ pressed }) => [
+              styles.optionChip,
+              {
+                backgroundColor: autoPauseEnabled ? palette.primary : palette.surfaceAlt,
+              },
+              !autoPauseEnabled && darkSurfaceBorder,
+              pressed && { opacity: 0.78 },
+            ]}
+          >
+            <PauseCircle
+              size={13}
+              strokeWidth={2}
+              color={autoPauseEnabled ? palette.onPrimary : palette.onSurfaceVariant}
+            />
+            <Text
+              style={[
+                styles.optionChipText,
+                {
+                  color: autoPauseEnabled ? palette.onPrimary : palette.onSurfaceVariant,
+                },
+              ]}
+            >
+              {t.record.autoPauseLabel}
+            </Text>
+          </Pressable>
+        </View>
+      )}
+
+      {trackingMode === 'outdoor' && hasLocationPermission === false && (
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={t.record.permissionTitle}
@@ -256,9 +502,80 @@ export default function RecordScreen() {
         </Pressable>
       )}
 
-      {/* Center Map / Splits Frame */}
+      {hasPedometerPermission === false && (
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => void Linking.openSettings()}
+          style={({ pressed }) => [
+            styles.permissionBanner,
+            { backgroundColor: palette.surfaceAlt },
+            darkSurfaceBorder,
+            pressed && { opacity: 0.8 },
+          ]}
+        >
+          <AlertTriangle size={15} strokeWidth={2} color={palette.onSurfaceVariant} />
+          <Text
+            style={[styles.permissionBannerText, { color: palette.onSurfaceVariant }]}
+            numberOfLines={1}
+          >
+            {t.record.pedometerDeniedBanner}
+          </Text>
+        </Pressable>
+      )}
+
+      {/* Center Map / Indoor Panel / Splits Frame */}
       <View style={styles.centerArea}>
-        {viewMode === 'map' ? (
+        {viewMode === 'splits' ? (
+          <ScrollView style={styles.splitsScroll} showsVerticalScrollIndicator={false}>
+            <Text style={[styles.splitsKicker, { color: palette.onSurfaceVariant }]}>
+              {t.record.splitsKicker}
+            </Text>
+            <Text style={[styles.splitsHeading, { color: palette.onSurface }]}>
+              {t.record.splitsHeading}
+            </Text>
+            <SplitsTable splits={splits} />
+          </ScrollView>
+        ) : trackingMode === 'indoor' ? (
+          <View
+            style={[
+              styles.indoorCard,
+              { backgroundColor: palette.surfaceAlt },
+              darkSurfaceBorder,
+            ]}
+          >
+            <View
+              style={[
+                styles.indoorIconCircle,
+                { backgroundColor: palette.surfaceRaised },
+                darkSurfaceBorder,
+              ]}
+            >
+              <Footprints size={28} strokeWidth={2} color={palette.accent} />
+            </View>
+            <Text style={[styles.indoorKicker, { color: palette.onSurfaceVariant }]}>
+              {t.record.indoorCardKicker}
+            </Text>
+            <Text style={[styles.indoorHeading, { color: palette.onSurface }]}>
+              {t.record.indoorCardHeading}
+            </Text>
+            <Text style={[styles.indoorHint, { color: palette.onSurfaceVariant }]}>
+              {pedometerAvailable === false
+                ? t.record.indoorUnavailableHint
+                : t.record.indoorCardSensorHint}
+            </Text>
+            <View
+              style={[
+                styles.strideBadge,
+                { backgroundColor: palette.surfaceRaised },
+                darkSurfaceBorder,
+              ]}
+            >
+              <Text style={[styles.strideBadgeText, { color: palette.onSurface }]}>
+                {t.record.indoorCardStride(strideCm)}
+              </Text>
+            </View>
+          </View>
+        ) : (
           <View
             style={[
               styles.mapFrame,
@@ -269,19 +586,9 @@ export default function RecordScreen() {
             <WorkoutMap
               currentLocation={currentLocation}
               routeCoordinates={routeCoordinates}
-              isTracking={status === 'recording'}
+              isTracking={status === 'recording' && !isAutoPaused}
             />
           </View>
-        ) : (
-          <ScrollView style={styles.splitsScroll} showsVerticalScrollIndicator={false}>
-            <Text style={[styles.splitsKicker, { color: palette.onSurfaceVariant }]}>
-              {t.record.splitsKicker}
-            </Text>
-            <Text style={[styles.splitsHeading, { color: palette.onSurface }]}>
-              {t.record.splitsHeading}
-            </Text>
-            <SplitsTable splits={splits} />
-          </ScrollView>
         )}
       </View>
 
@@ -295,6 +602,9 @@ export default function RecordScreen() {
           caloriesKcal={caloriesKcal}
           steps={steps}
           cadenceSpm={avgCadenceSpm}
+          elevationGainMeters={elevationGainMeters}
+          trackingMode={trackingMode}
+          stepTrackingMode={stepTrackingMode}
         />
 
         <RunnerMiniPlayer />
@@ -304,8 +614,8 @@ export default function RecordScreen() {
           selectedType={selectedType}
           onSelectType={setSelectedType}
           onStart={() => void handleStart()}
-          onPause={pauseWorkout}
-          onResume={resumeWorkout}
+          onPause={() => void pauseWorkout()}
+          onResume={() => void resumeWorkout()}
           onStop={() => void handleStop()}
         />
       </View>
@@ -373,6 +683,82 @@ const styles = StyleSheet.create({
   },
   modeChipText: {
     ...TYPOGRAPHY.labelSm,
+  },
+  signalBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: RADIUS.full,
+  },
+  signalBadgeText: {
+    ...TYPOGRAPHY.labelSm,
+    fontSize: 11,
+  },
+  optionsStrip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: SPACING.gutter,
+    marginBottom: SPACING.sm,
+    gap: 8,
+  },
+  optionsLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  optionChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: RADIUS.full,
+  },
+  optionChipText: {
+    ...TYPOGRAPHY.labelSm,
+    fontSize: 11,
+  },
+  indoorCard: {
+    flex: 1,
+    borderRadius: RADIUS.lg,
+    borderCurve: 'continuous',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: SPACING.xl,
+    gap: 8,
+  },
+  indoorIconCircle: {
+    width: 60,
+    height: 60,
+    borderRadius: RADIUS.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 6,
+  },
+  indoorKicker: {
+    ...TYPOGRAPHY.labelUppercase,
+  },
+  indoorHeading: {
+    ...TYPOGRAPHY.headlineSm,
+    textAlign: 'center',
+  },
+  indoorHint: {
+    ...TYPOGRAPHY.bodySm,
+    textAlign: 'center',
+    maxWidth: 260,
+  },
+  strideBadge: {
+    marginTop: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: RADIUS.full,
+  },
+  strideBadgeText: {
+    ...TYPOGRAPHY.labelSm,
+    fontFamily: FONT_FAMILY.displaySemiBold,
   },
   permissionBanner: {
     flexDirection: 'row',

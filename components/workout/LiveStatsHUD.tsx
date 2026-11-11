@@ -1,6 +1,12 @@
 import React from 'react';
 import { StyleSheet, View, Text } from 'react-native';
-import { formatDuration, formatPace, formatSteps } from '@/services/location/metrics';
+import {
+  formatDuration,
+  formatElevationMeters,
+  formatPace,
+  formatSteps,
+} from '@/services/location/metrics';
+import { StepTrackingMode, TrackingMode } from '@/types/workout';
 import { FONT_FAMILY, RADIUS, SPACING, TYPOGRAPHY } from '@/constants/Colors';
 import { usePreferences } from '@/context/AppPreferencesContext';
 
@@ -12,6 +18,9 @@ interface LiveStatsHUDProps {
   caloriesKcal: number;
   steps?: number;
   cadenceSpm?: number;
+  elevationGainMeters?: number;
+  trackingMode?: TrackingMode;
+  stepTrackingMode?: StepTrackingMode;
 }
 
 /**
@@ -22,12 +31,20 @@ export function LiveStatsHUD({
   durationSeconds,
   distanceMeters,
   avgPaceSeconds,
+  currentPaceSeconds,
   caloriesKcal,
   steps = 0,
   cadenceSpm = 0,
+  elevationGainMeters = 0,
+  trackingMode = 'outdoor',
+  stepTrackingMode = 'fallback',
 }: LiveStatsHUDProps) {
   const { palette, isDark, t } = usePreferences();
   const distanceKm = (distanceMeters / 1000).toFixed(2);
+  const stepSourceLabel =
+    stepTrackingMode === 'sensor'
+      ? t.record.pedometerSensorTag
+      : t.record.pedometerFallbackTag;
 
   return (
     <View
@@ -54,6 +71,15 @@ export function LiveStatsHUD({
               {t.common.kmUnit.toUpperCase()}
             </Text>
           </View>
+        </View>
+
+        <View style={styles.currentPaceBox}>
+          <Text style={[styles.kicker, { color: palette.onSurfaceVariant }]}>
+            {t.hud.currentPace}
+          </Text>
+          <Text style={[styles.currentPaceVal, { color: palette.onSurface }]}>
+            {formatPace(currentPaceSeconds)}
+          </Text>
         </View>
       </View>
 
@@ -100,10 +126,15 @@ export function LiveStatsHUD({
 
       <View style={styles.metricsRow}>
         <View style={styles.metricItem}>
-          <Text style={[styles.metricLabel, { color: palette.onSurfaceVariant }]}>
-            {t.hud.steps}
-          </Text>
-          <Text style={[styles.metricValue, { color: palette.onSurface }]}>
+          <View style={styles.stepHeaderRow}>
+            <Text style={[styles.metricLabel, { color: palette.onSurfaceVariant, marginBottom: 0 }]}>
+              {t.hud.steps}
+            </Text>
+            <Text style={[styles.sourceTag, { color: palette.onSurfaceVariant }]}>
+              · {stepSourceLabel}
+            </Text>
+          </View>
+          <Text style={[styles.metricValue, { color: palette.onSurface, marginTop: 4 }]}>
             {formatSteps(steps)}
           </Text>
         </View>
@@ -122,6 +153,20 @@ export function LiveStatsHUD({
             </Text>
           </Text>
         </View>
+
+        {trackingMode === 'outdoor' && (
+          <>
+            <View style={[styles.vertDivider, { backgroundColor: palette.border }]} />
+            <View style={styles.metricItem}>
+              <Text style={[styles.metricLabel, { color: palette.onSurfaceVariant }]}>
+                {t.hud.elevation}
+              </Text>
+              <Text style={[styles.metricValue, { color: palette.onSurface }]}>
+                {formatElevationMeters(elevationGainMeters)}
+              </Text>
+            </View>
+          </>
+        )}
       </View>
     </View>
   );
@@ -135,8 +180,25 @@ const styles = StyleSheet.create({
   },
   heroRow: {
     flexDirection: 'row',
-    alignItems: 'baseline',
+    alignItems: 'flex-end',
     justifyContent: 'space-between',
+  },
+  currentPaceBox: {
+    alignItems: 'flex-end',
+    paddingBottom: 4,
+  },
+  currentPaceVal: {
+    ...TYPOGRAPHY.numeralSm,
+    fontSize: 22,
+  },
+  stepHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  sourceTag: {
+    fontFamily: FONT_FAMILY.bodyMedium,
+    fontSize: 10,
   },
   kicker: {
     ...TYPOGRAPHY.labelUppercase,

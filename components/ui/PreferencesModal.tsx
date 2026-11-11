@@ -6,6 +6,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 import Constants from 'expo-constants';
@@ -13,7 +14,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   Check,
   Globe,
+  Minus,
   Moon,
+  Plus,
   RefreshCw,
   Smartphone,
   Sun,
@@ -26,6 +29,7 @@ import {
   ThemeMode,
   TYPOGRAPHY,
 } from '@/constants/Colors';
+import { WORKOUT_CONFIG } from '@/constants/Config';
 import { AppLanguage } from '@/constants/i18n';
 import { usePreferences } from '@/context/AppPreferencesContext';
 import { useAppUpdates } from '@/hooks/useAppUpdates';
@@ -46,8 +50,17 @@ interface InlineFeedbackState {
 
 export function PreferencesModal({ visible, onClose }: PreferencesModalProps) {
   const insets = useSafeAreaInsets();
-  const { themeMode, language, palette, isDark, t, setThemeMode, setLanguage } =
-    usePreferences();
+  const {
+    themeMode,
+    language,
+    weightKg,
+    palette,
+    isDark,
+    t,
+    setThemeMode,
+    setLanguage,
+    setWeightKg,
+  } = usePreferences();
   const {
     isUpdatePending,
     checkForUpdateManually,
@@ -55,6 +68,7 @@ export function PreferencesModal({ visible, onClose }: PreferencesModalProps) {
   } = useAppUpdates();
 
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
+  const [editingWeight, setEditingWeight] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<InlineFeedbackState>({
     visible: false,
     tone: 'info',
@@ -297,7 +311,82 @@ export function PreferencesModal({ visible, onClose }: PreferencesModalProps) {
 
             <View style={[styles.hairline, { backgroundColor: palette.border }]} />
 
-            {/* Section 3: App Version & Friendly Update Check */}
+            {/* Section 3: Body Weight (kg) for accurate MET calorie calculation */}
+            <View style={styles.section}>
+              <Text style={[styles.sectionKicker, { color: palette.onSurfaceVariant }]}>
+                {t.preferences.bodyWeightLabel}
+              </Text>
+              <View style={styles.weightRow}>
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() => {
+                    setEditingWeight(null);
+                    void setWeightKg(weightKg - 1);
+                  }}
+                  style={({ pressed }) => [
+                    styles.weightStepBtn,
+                    { backgroundColor: palette.modalSurfaceAlt },
+                    pressed && { opacity: 0.75 },
+                  ]}
+                >
+                  <Minus size={18} strokeWidth={2.2} color={palette.onSurface} />
+                </Pressable>
+
+                <View
+                  style={[
+                    styles.weightValueBox,
+                    { backgroundColor: palette.modalSurfaceAlt },
+                  ]}
+                >
+                  <TextInput
+                    style={[styles.weightInput, { color: palette.onSurface }]}
+                    keyboardType="number-pad"
+                    maxLength={3}
+                    value={editingWeight ?? String(weightKg)}
+                    onFocus={() => setEditingWeight(String(weightKg))}
+                    onChangeText={(text) => setEditingWeight(text.replace(/[^0-9]/g, ''))}
+                    onEndEditing={() => {
+                      const parsed = Number(editingWeight);
+                      setEditingWeight(null);
+                      if (Number.isFinite(parsed) && parsed > 0) {
+                        void setWeightKg(
+                          Math.min(
+                            WORKOUT_CONFIG.maxWeightKg,
+                            Math.max(WORKOUT_CONFIG.minWeightKg, parsed)
+                          )
+                        );
+                      }
+                    }}
+                    returnKeyType="done"
+                  />
+                  <Text style={[styles.weightUnit, { color: palette.onSurfaceVariant }]}>
+                    {t.preferences.kgUnit}
+                  </Text>
+                </View>
+
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() => {
+                    setEditingWeight(null);
+                    void setWeightKg(weightKg + 1);
+                  }}
+                  style={({ pressed }) => [
+                    styles.weightStepBtn,
+                    { backgroundColor: palette.modalSurfaceAlt },
+                    pressed && { opacity: 0.75 },
+                  ]}
+                >
+                  <Plus size={18} strokeWidth={2.2} color={palette.onSurface} />
+                </Pressable>
+              </View>
+              <Text style={[styles.helperText, { color: palette.onSurfaceVariant }]}>
+                {t.preferences.bodyWeightHint}
+              </Text>
+            </View>
+
+            <View style={[styles.hairline, { backgroundColor: palette.border }]} />
+
+            {/* Section 4: App Version & Friendly Update Check */}
             <View
               style={[
                 styles.updateCard,
@@ -522,6 +611,39 @@ const styles = StyleSheet.create({
   langLabel: {
     ...TYPOGRAPHY.labelMd,
     fontFamily: FONT_FAMILY.displaySemiBold,
+  },
+  weightRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.sm,
+  },
+  weightStepBtn: {
+    width: 46,
+    height: 46,
+    borderRadius: RADIUS.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  weightValueBox: {
+    flex: 1,
+    height: 46,
+    borderRadius: RADIUS.full,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingHorizontal: SPACING.lg,
+  },
+  weightInput: {
+    fontFamily: FONT_FAMILY.displayBold,
+    fontSize: 18,
+    fontVariant: ['tabular-nums'],
+    textAlign: 'center',
+    minWidth: 42,
+    paddingVertical: 0,
+  },
+  weightUnit: {
+    ...TYPOGRAPHY.labelMd,
   },
   updateCard: {
     borderRadius: RADIUS.lg,

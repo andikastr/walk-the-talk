@@ -16,6 +16,7 @@ import {
 } from '@expo-google-fonts/inter';
 
 import { useAppUpdates } from '@/hooks/useAppUpdates';
+import '@/services/location/background-task';
 import { AppPreferencesProvider, usePreferences } from '@/context/AppPreferencesContext';
 import { AppDialogProvider } from '@/context/AppDialogContext';
 import { SpotifyAuthProvider } from '@/context/SpotifyAuthContext';

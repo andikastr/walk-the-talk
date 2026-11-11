@@ -62,7 +62,7 @@ export function RouteSilhouette({
     if (spanX < 1e-8 && spanY < 1e-8) {
       return {
         isSingleSpot: true,
-        pointsAttr: '',
+        segmentAttrs: [] as string[],
         start: { x: width / 2, y: height / 2 },
         end: { x: width / 2, y: height / 2 },
       };
@@ -80,14 +80,34 @@ export function RouteSilhouette({
     const offsetX = padding + (drawW - renderedW) / 2;
     const offsetY = padding + (drawH - renderedH) / 2;
 
-    const coords = sampled.map((_, idx) => ({
+    const coords = sampled.map((pt, idx) => ({
       x: Number((offsetX + (xs[idx] - minX) * scale).toFixed(1)),
       y: Number((offsetY + (ys[idx] - minY) * scale).toFixed(1)),
+      segmentIndex: pt.segmentIndex ?? 0,
     }));
 
+    const segmentAttrs: string[] = [];
+    let currentSeg: { x: number; y: number }[] = [];
+    let currentSegIdx: number | null = null;
+
+    for (const pt of coords) {
+      if (currentSegIdx === null || pt.segmentIndex !== currentSegIdx) {
+        if (currentSeg.length > 1) {
+          segmentAttrs.push(currentSeg.map((p) => `${p.x},${p.y}`).join(' '));
+        }
+        currentSeg = [{ x: pt.x, y: pt.y }];
+        currentSegIdx = pt.segmentIndex;
+      } else {
+        currentSeg.push({ x: pt.x, y: pt.y });
+      }
+    }
+    if (currentSeg.length > 1) {
+      segmentAttrs.push(currentSeg.map((p) => `${p.x},${p.y}`).join(' '));
+    }
+
     return {
-      isSingleSpot: false,
-      pointsAttr: coords.map((pt) => `${pt.x},${pt.y}`).join(' '),
+      isSingleSpot: segmentAttrs.length === 0,
+      segmentAttrs,
       start: coords[0],
       end: coords[coords.length - 1],
     };
@@ -107,16 +127,18 @@ export function RouteSilhouette({
   return (
     <View collapsable={false} style={{ width, height }}>
       <Svg width={width} height={height} viewBox={`0 0 ${width} ${height}`}>
-        {!projected.isSingleSpot && (
-          <Polyline
-            points={projected.pointsAttr}
-            fill="none"
-            stroke={strokeColor}
-            strokeWidth={strokeWidth}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        )}
+        {!projected.isSingleSpot &&
+          projected.segmentAttrs.map((pointsAttr, idx) => (
+            <Polyline
+              key={`seg-${idx}`}
+              points={pointsAttr}
+              fill="none"
+              stroke={strokeColor}
+              strokeWidth={strokeWidth}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          ))}
         {!projected.isSingleSpot && (
           <Circle
             cx={projected.start.x}

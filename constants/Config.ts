@@ -33,22 +33,47 @@ export const SPOTIFY_CONFIG = {
 };
 
 export const WORKOUT_CONFIG = {
+  // Akurasi GPS bagus untuk indikator siap (meter)
+  gpsGoodAccuracyMeters: 15,
+  // Akurasi minimum GPS saat cold start sebelum mengunci titik pertama (meter)
+  gpsColdStartAccuracyMeters: 20,
   // Akurasi minimum GPS dalam meter yang diterima (mengabaikan titik noise)
   gpsMaxAccuracyMeters: 25,
   // Jarak minimum pergerakan dalam meter untuk mencatat titik baru (mencegah drift saat diam)
   minMovementDistanceMeters: 3,
+  // Kecepatan maksimum realistis (m/s, ~43 km/jam) untuk memfilter spike/teleport GPS
+  maxPlausibleSpeedMps: 12,
+  // Batas lonjakan elevasi tunggal yang dianggap valid (meter) & ambang noise vertikal
+  elevationNoiseThresholdMeters: 3.5,
+  maxSingleElevationStepMeters: 20,
   // Interval update lokasi GPS (dalam ms)
   locationTimeIntervalMs: 2000,
   // Jarak update lokasi GPS (dalam meter)
   locationDistanceIntervalMeters: 2,
-  // Berat badan default (kg) untuk estimasi kalori MET jika belum diatur
+  // Auto-pause threshold: jeda otomatis setelah diam >= 8 detik tanpa langkah
+  autoPauseSpeedMps: 0.45,
+  autoPauseIdleMs: 8000,
+  autoResumeSpeedMps: 0.85,
+  autoResumeMinMovementMeters: 4,
+  autoResumeMinSteps: 4,
+  // Interval penyimpanan checkpoint crash-recovery ke SQLite (ms)
+  checkpointIntervalMs: 15000,
+  // Jarak hening sensor pedometer sebelum fallback estimasi aktif (meter)
+  silentSensorFallbackMeters: 30,
+  // Berat badan default & rentang valid (kg) untuk estimasi kalori MET
   defaultWeightKg: 65,
-  // Estimasi panjang langkah (meter/langkah) untuk fallback pedometer saat sensor tidak aktif
+  minWeightKg: 30,
+  maxWeightKg: 250,
+  // Estimasi panjang langkah default (meter/langkah) saat kalibrasi pribadi belum terbentuk
   strideMetersByType: {
     walk: 0.72,
     jog: 0.9,
     run: 1.05,
   },
+  minCalibratedStrideMeters: 0.45,
+  maxCalibratedStrideMeters: 1.85,
+  minCalibrationSteps: 100,
+  minCalibrationDistanceMeters: 70,
 };
 
 export const MAP_CONFIG = {

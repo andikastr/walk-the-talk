@@ -2,6 +2,12 @@ export type WorkoutType = 'walk' | 'jog' | 'run';
 
 export type WorkoutStatus = 'idle' | 'recording' | 'paused' | 'completed';
 
+export type TrackingMode = 'outdoor' | 'indoor';
+
+export type StepTrackingMode = 'sensor' | 'fallback';
+
+export type GpsSignalQuality = 'acquiring' | 'weak' | 'good';
+
 export interface GPSCoordinate {
   latitude: number;
   longitude: number;
@@ -9,6 +15,7 @@ export interface GPSCoordinate {
   accuracy?: number | null;
   speed?: number | null; // meters per second
   timestamp: number;
+  segmentIndex?: number;
 }
 
 export interface WorkoutSplit {
@@ -34,6 +41,8 @@ export interface WorkoutRecord {
   soundtrackArtist?: string;
   steps?: number;
   avgCadenceSpm?: number;
+  elevationGainMeters?: number;
+  isIndoor?: boolean;
 }
 
 export interface WorkoutStats {
@@ -42,5 +51,39 @@ export interface WorkoutStats {
   totalWorkouts: number;
   totalCaloriesKcal: number;
   totalSteps: number;
+}
+
+export interface ActiveWorkoutCheckpoint {
+  version: number;
+  type: WorkoutType;
+  trackingMode: TrackingMode;
+  autoPauseEnabled: boolean;
+  status: 'recording' | 'paused';
+  isAutoPaused: boolean;
+  startTime: number;
+  accumulatedActiveMs: number;
+  activeSegmentStartMs: number | null;
+  distanceMeters: number;
+  steps: number;
+  elevationGainMeters: number;
+  smoothedAltitudeMeters: number | null;
+  elevationAnchorMeters: number | null;
+  smoothedCurrentPaceSeconds: number;
+  currentSegmentIndex: number;
+  routePoints: GPSCoordinate[];
+  splits: WorkoutSplit[];
+  splitProgressMeters: number;
+  splitProgressSeconds: number;
+  splitElevationGainMeters: number;
+  lastAnchoredPoint: GPSCoordinate | null;
+  recentPoints: GPSCoordinate[];
+  lastMovementOrStepAt: number;
+  lastStepSyncTimestamp: number;
+  distanceAtLastStepEvent: number;
+  fallbackBgStepsAdded: number;
+  calibGpsMeters: number;
+  calibHwSteps: number;
+  weightKg: number;
+  lastSavedAt: number;
 }
 
