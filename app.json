@@ -1,23 +1,40 @@
 {
   "expo": {
-    "name": "walk-the-talk",
+    "name": "Walk The Talk",
     "slug": "walk-the-talk",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "walkthetalk",
-    "userInterfaceStyle": "automatic",
+    "userInterfaceStyle": "light",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.andikasatria.walkthetalk",
+      "infoPlist": {
+        "UIBackgroundModes": [
+          "location"
+        ],
+        "NSLocationWhenInUseUsageDescription": "Walk The Talk memerlukan izin lokasi untuk melacak rute dan jarak aktivitas olahraga Anda secara real-time.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "Walk The Talk memerlukan izin lokasi di latar belakang untuk terus mencatat jarak dan rute saat layar mati."
+      }
     },
     "android": {
+      "package": "com.andikasatria.walkthetalk",
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#0E0F0C",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_LOCATION",
+        "ACTIVITY_RECOGNITION"
+      ]
     },
     "web": {
       "bundler": "metro",
@@ -30,13 +47,54 @@
         "expo-splash-screen",
         {
           "image": "./assets/images/splash-icon.png",
+          "imageWidth": 240,
           "resizeMode": "contain",
-          "backgroundColor": "#ffffff"
+          "backgroundColor": "#F4F2EC"
         }
-      ]
+      ],
+      "expo-secure-store",
+      "expo-sqlite",
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Walk The Talk memerlukan izin lokasi untuk melacak rute dan jarak aktivitas olahraga Anda secara real-time.",
+          "locationAlwaysPermission": "Walk The Talk memerlukan izin lokasi di latar belakang untuk terus mencatat jarak dan rute saat layar mati.",
+          "locationWhenInUsePermission": "Walk The Talk memerlukan izin lokasi untuk menghitung rute, pace, dan jarak Anda.",
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "enableMinifyInReleaseBuilds": true,
+            "enableShrinkResourcesInReleaseBuilds": true,
+            "buildArchs": ["arm64-v8a"]
+          }
+        }
+      ],
+      "expo-sharing"
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "router": {
+        "asyncRoutes": {
+          "web": true
+        }
+      },
+      "eas": {
+        "projectId": "618d98c8-1765-43c3-83c4-6a2ae6b5ccbf"
+      }
+    },
+    "owner": "andkstrptra",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/618d98c8-1765-43c3-83c4-6a2ae6b5ccbf"
     }
   }
 }

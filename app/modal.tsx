@@ -1,18 +1,15 @@
 import { StatusBar } from 'expo-status-bar';
-import { Platform, StyleSheet } from 'react-native';
-
-import EditScreenInfo from '@/components/EditScreenInfo';
-import { Text, View } from '@/components/Themed';
+import { StyleSheet, Text, View } from 'react-native';
+import { PALETTE, SPACING, TYPOGRAPHY } from '@/constants/Colors';
 
 export default function ModalScreen() {
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Modal</Text>
-      <View style={styles.separator} lightColor="#eee" darkColor="rgba(255,255,255,0.1)" />
-      <EditScreenInfo path="app/modal.tsx" />
-
-      {/* Use a light status bar on iOS to account for the black space above the modal */}
-      <StatusBar style={Platform.OS === 'ios' ? 'light' : 'auto'} />
+      <Text style={styles.kicker}>WALK THE TALK</Text>
+      <Text style={styles.title}>Info</Text>
+      <View style={styles.separator} />
+      <Text style={styles.body}>Pelacak rute lari & kendali pemutar Spotify.</Text>
+      <StatusBar style="dark" />
     </View>
   );
 }
@@ -20,16 +17,28 @@ export default function ModalScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    backgroundColor: PALETTE.surface,
     alignItems: 'center',
     justifyContent: 'center',
+    padding: SPACING.gutter,
+  },
+  kicker: {
+    ...TYPOGRAPHY.labelUppercase,
+    color: PALETTE.onSurfaceVariant,
+    marginBottom: SPACING.xs,
   },
   title: {
-    fontSize: 20,
-    fontWeight: 'bold',
+    ...TYPOGRAPHY.headlineMd,
+    color: PALETTE.onSurface,
   },
   separator: {
-    marginVertical: 30,
+    marginVertical: SPACING.xl,
     height: 1,
-    width: '80%',
+    width: '60%',
+    backgroundColor: PALETTE.border,
+  },
+  body: {
+    ...TYPOGRAPHY.bodyMd,
+    color: PALETTE.onSurfaceVariant,
   },
 });
