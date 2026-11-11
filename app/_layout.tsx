@@ -15,11 +15,12 @@ import {
   Inter_600SemiBold,
 } from '@expo-google-fonts/inter';
 
-import { useAppUpdates } from '@/hooks/useAppUpdates';
 import '@/services/location/background-task';
 import { AppPreferencesProvider, usePreferences } from '@/context/AppPreferencesContext';
 import { AppDialogProvider } from '@/context/AppDialogContext';
+import { AppUpdatesProvider } from '@/context/AppUpdatesContext';
 import { SpotifyAuthProvider } from '@/context/SpotifyAuthContext';
+import { SpotifyPlayerProvider } from '@/context/SpotifyPlayerContext';
 import { FONT_FAMILY } from '@/constants/Colors';
 
 export {
@@ -28,7 +29,7 @@ export {
 } from 'expo-router';
 
 export const unstable_settings = {
-  // Ensure that reloading on `/modal` keeps a back button present.
+  // Ensure that reloading/deep-linking directly keeps the primary tabs screen as anchor.
   anchor: '(tabs)',
 };
 
@@ -64,7 +65,9 @@ export default function RootLayout() {
   return (
     <AppPreferencesProvider>
       <AppDialogProvider>
-        <RootLayoutNav />
+        <AppUpdatesProvider>
+          <RootLayoutNav />
+        </AppUpdatesProvider>
       </AppDialogProvider>
     </AppPreferencesProvider>
   );
@@ -73,7 +76,6 @@ export default function RootLayout() {
 function RootLayoutNav() {
   const { palette, isDark, t } = usePreferences();
   const reduced = useReducedMotion();
-  useAppUpdates();
 
   const navigationTheme = useMemo(
     () => ({
@@ -94,50 +96,37 @@ function RootLayoutNav() {
 
   return (
     <SpotifyAuthProvider>
-      <ThemeProvider value={navigationTheme}>
-        <StatusBar style={isDark ? 'light' : 'dark'} />
-        <Stack
-          screenOptions={{
-            contentStyle: { backgroundColor: palette.surface },
-            animation: reduced ? 'fade' : 'slide_from_right',
-            animationMatchesGesture: true,
-          }}
-        >
-          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-          <Stack.Screen
-            name="workout/[id]"
-            options={{
-              title: t.routes.workoutDetail,
+      <SpotifyPlayerProvider>
+        <ThemeProvider value={navigationTheme}>
+          <StatusBar style={isDark ? 'light' : 'dark'} />
+          <Stack
+            screenOptions={{
+              contentStyle: { backgroundColor: palette.surface },
               animation: reduced ? 'fade' : 'slide_from_right',
               animationMatchesGesture: true,
-              headerStyle: { backgroundColor: palette.surface },
-              headerTitleStyle: {
-                fontFamily: FONT_FAMILY.displaySemiBold,
-                fontSize: 17,
-                color: palette.onSurface,
-              },
-              headerTintColor: palette.onSurface,
-              headerShadowVisible: false,
-              headerBackTitle: t.common.back,
             }}
-          />
-          <Stack.Screen
-            name="modal"
-            options={{
-              presentation: 'modal',
-              animation: reduced ? 'fade' : 'fade_from_bottom',
-              title: t.routes.infoTitle,
-              headerStyle: { backgroundColor: palette.surface },
-              headerTitleStyle: {
-                fontFamily: FONT_FAMILY.displaySemiBold,
-                color: palette.onSurface,
-              },
-              headerTintColor: palette.onSurface,
-              headerShadowVisible: false,
-            }}
-          />
-        </Stack>
-      </ThemeProvider>
+          >
+            <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+            <Stack.Screen
+              name="workout/[id]"
+              options={{
+                title: t.routes.workoutDetail,
+                animation: reduced ? 'fade' : 'slide_from_right',
+                animationMatchesGesture: true,
+                headerStyle: { backgroundColor: palette.surface },
+                headerTitleStyle: {
+                  fontFamily: FONT_FAMILY.displaySemiBold,
+                  fontSize: 17,
+                  color: palette.onSurface,
+                },
+                headerTintColor: palette.onSurface,
+                headerShadowVisible: false,
+                headerBackTitle: t.common.back,
+              }}
+            />
+          </Stack>
+        </ThemeProvider>
+      </SpotifyPlayerProvider>
     </SpotifyAuthProvider>
   );
 }

@@ -29,7 +29,7 @@ import {
 } from 'lucide-react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useSpotifyAuth } from '@/hooks/useSpotifyAuth';
-import { useSpotifyPlayer } from '@/hooks/useSpotifyPlayer';
+import { useSpotifyPlayer, useSpotifyPlayerFocus } from '@/hooks/useSpotifyPlayer';
 import { getUserPlaylists, playMusic } from '@/services/spotify/player';
 import { SpotifyPlaylist } from '@/types/spotify';
 import { FONT_FAMILY, RADIUS, SPACING, TYPOGRAPHY } from '@/constants/Colors';
@@ -76,6 +76,8 @@ export default function MusicScreen() {
     wakeUpSpotify,
   } = useSpotifyPlayer();
 
+  useSpotifyPlayerFocus();
+
   const [playlists, setPlaylists] = useState<SpotifyPlaylist[]>([]);
   const [isLoadingPlaylists, setIsLoadingPlaylists] = useState(false);
   const [deviceModalVisible, setDeviceModalVisible] = useState(false);
@@ -117,10 +119,11 @@ export default function MusicScreen() {
     try {
       let targetDeviceId = activeDevice?.id;
       if (!targetDeviceId) {
+        const availableDevices = devices.length > 0 ? devices : await refreshDevices();
         const target =
-          devices.find((d) => d.is_active) ||
-          devices.find((d) => d.type === 'Smartphone') ||
-          devices[0];
+          availableDevices.find((d) => d.is_active) ||
+          availableDevices.find((d) => d.type === 'Smartphone') ||
+          availableDevices[0];
         targetDeviceId = target?.id;
       }
       await playMusic({ contextUri: playlist.uri, deviceId: targetDeviceId || undefined });

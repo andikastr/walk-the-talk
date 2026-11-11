@@ -41,13 +41,6 @@ export default function TabLayout() {
           title: t.tabs.music,
         }}
       />
-      {/* Sembunyikan tab template bawaan */}
-      <Tabs.Screen
-        name="two"
-        options={{
-          href: null,
-        }}
-      />
     </Tabs>
   );
 }

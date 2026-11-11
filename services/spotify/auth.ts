@@ -162,10 +162,14 @@ async function exchangeCodeForToken(
   return data;
 }
 
+let refreshInFlight: Promise<string | null> | null = null;
+let authGeneration = 0;
+
 /**
- * Melakukan refresh access token yang kedaluwarsa
+ * Eksekusi aktual refresh access token tanpa lock eksternal.
  */
-export async function refreshAccessToken(): Promise<string | null> {
+async function performRefreshAccessToken(): Promise<string | null> {
+  const generationAtStart = authGeneration;
   const refreshToken = await SecureStore.getItemAsync(SPOTIFY_CONFIG.storageKeys.refreshToken);
   if (!refreshToken) {
     await clearTokens();
@@ -188,12 +192,22 @@ export async function refreshAccessToken(): Promise<string | null> {
     });
 
     if (!response.ok) {
-      // Jika refresh token ditolak (misal dicabut oleh pengguna), bersihkan token lokal
-      await clearTokens();
+      // Hanya bersihkan token lokal jika refresh token memang invalid/dicabut (400/401)
+      if (response.status === 400 || response.status === 401) {
+        if (generationAtStart === authGeneration) {
+          await clearTokens();
+        }
+      } else {
+        console.warn(`Refresh Spotify token gagal sementara (HTTP ${response.status}).`);
+      }
       return null;
     }
 
     const data: SpotifyTokenResponse = await response.json();
+    // Abaikan hasil refresh jika pengguna keburu logout/login ulang selama request berlangsung
+    if (generationAtStart !== authGeneration) {
+      return null;
+    }
     await saveTokens(data);
     return data.access_token;
   } catch (err) {
@@ -203,9 +217,22 @@ export async function refreshAccessToken(): Promise<string | null> {
 }
 
 /**
+ * Melakukan refresh access token dengan single-flight mutex agar tidak terjadi race refresh paralel.
+ */
+export async function refreshAccessToken(): Promise<string | null> {
+  if (!refreshInFlight) {
+    refreshInFlight = performRefreshAccessToken().finally(() => {
+      refreshInFlight = null;
+    });
+  }
+  return refreshInFlight;
+}
+
+/**
  * Menyimpan token secara terenkripsi di SecureStore
  */
 async function saveTokens(data: SpotifyTokenResponse): Promise<void> {
+  authGeneration += 1;
   await SecureStore.setItemAsync(SPOTIFY_CONFIG.storageKeys.accessToken, data.access_token);
 
   if (data.refresh_token) {
@@ -301,6 +328,7 @@ export async function completeAuthWithUrl(urlOrCode: string): Promise<boolean> {
  * Logout & bersihkan seluruh token Spotify
  */
 export async function clearTokens(): Promise<void> {
+  authGeneration += 1;
   await SecureStore.deleteItemAsync(SPOTIFY_CONFIG.storageKeys.accessToken);
   await SecureStore.deleteItemAsync(SPOTIFY_CONFIG.storageKeys.refreshToken);
   await SecureStore.deleteItemAsync(SPOTIFY_CONFIG.storageKeys.expiresAt);

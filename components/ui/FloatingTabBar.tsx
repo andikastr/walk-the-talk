@@ -184,7 +184,7 @@ export function FloatingTabBar({
       .filter((route) => {
         const desc = descriptors[route.key];
         const opts = desc?.options as Record<string, unknown> | undefined;
-        if (route.name === 'two' || opts?.href === null) return false;
+        if (opts?.href === null) return false;
         return route.name in tabLabels;
       })
       .sort(

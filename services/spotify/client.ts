@@ -1,6 +1,6 @@
 import { SPOTIFY_CONFIG } from '@/constants/Config';
 import { getActiveLanguage, getTranslations } from '@/constants/i18n';
-import { getValidAccessToken, refreshAccessToken, clearTokens } from './auth';
+import { getValidAccessToken, refreshAccessToken } from './auth';
 import { SpotifyApiErrorResponse } from '@/types/spotify';
 
 const MAX_RETRIES = 3;
@@ -62,16 +62,19 @@ export async function spotifyFetch<T>(
       return {} as T;
     }
 
-    // 401 Unauthorized: Coba refresh token dan retry 1 kali
+    // 401 Unauthorized: gunakan token baru jika caller lain baru saja me-refresh, atau refresh via mutex
     if (response.status === 401 && retryCount === 0) {
+      const latestToken = await getValidAccessToken();
+      if (latestToken && latestToken !== token) {
+        return spotifyFetch<T>(endpoint, options, retryCount + 1);
+      }
+
       console.warn('Spotify 401 Unauthorized, mencoba me-refresh access token...');
       const newToken = await refreshAccessToken();
       if (newToken) {
         return spotifyFetch<T>(endpoint, options, retryCount + 1);
-      } else {
-        await clearTokens();
-        throw new SpotifyApiError(401, errors.sessionExpired);
       }
+      throw new SpotifyApiError(401, errors.sessionExpired);
     }
 
     // 429 Too Many Requests: Exponential Backoff & Retry-After header

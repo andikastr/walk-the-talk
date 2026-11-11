@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { WebView, WebViewMessageEvent, WebViewProps } from 'react-native-webview';
-import { LocateFixed, Map } from 'lucide-react-native';
+import { LocateFixed, Map, WifiOff } from 'lucide-react-native';
 import { GPSCoordinate } from '@/types/workout';
 import { RADIUS, SPACING, ThemePalette, TYPOGRAPHY } from '@/constants/Colors';
 import { MAP_CONFIG } from '@/constants/Config';
 import { usePreferences } from '@/context/AppPreferencesContext';
+import { LEAFLET_CSS, LEAFLET_JS } from '@/components/map/leafletInlineAssets';
 
 interface WorkoutMapProps {
   currentLocation: { latitude: number; longitude: number } | null;
@@ -37,13 +38,16 @@ function buildLeafletHtml(
     : '&copy; OpenStreetMap';
   const attributionBg = isDark ? 'rgba(14, 15, 12, 0.85)' : 'rgba(244, 242, 236, 0.85)';
   const markerStrokeColor = isDark ? palette.surfaceFeature : palette.surfaceRaised;
+  const gridLineColor = isDark
+    ? 'rgba(244, 242, 236, 0.045)'
+    : 'rgba(14, 15, 12, 0.045)';
 
   return `<!DOCTYPE html>
 <html lang="${htmlLang}">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css" />
+  <style>${LEAFLET_CSS}</style>
   <style>
     * { box-sizing: border-box; }
     html, body, #map {
@@ -51,9 +55,16 @@ function buildLeafletHtml(
       padding: 0;
       width: 100%;
       height: 100%;
-      background: ${palette.surfaceAlt};
+      background-color: ${palette.surfaceAlt};
+      background-image:
+        linear-gradient(to right, ${gridLineColor} 1px, transparent 1px),
+        linear-gradient(to bottom, ${gridLineColor} 1px, transparent 1px);
+      background-size: 28px 28px;
       overflow: hidden;
       -webkit-tap-highlight-color: transparent;
+    }
+    .leaflet-container {
+      background: transparent !important;
     }
     .osm-dark-fallback {
       filter: brightness(0.6) invert(1) contrast(2.6) hue-rotate(200deg) saturate(0.35) brightness(0.75);
@@ -74,7 +85,7 @@ function buildLeafletHtml(
 </head>
 <body>
   <div id="map"></div>
-  <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>${LEAFLET_JS}</script>
   <script>
     (function () {
       var map = L.map('map', {
@@ -85,6 +96,34 @@ function buildLeafletHtml(
       L.control.attribution({ position: 'bottomleft', prefix: false })
         .addAttribution(${JSON.stringify(attributionHtml)})
         .addTo(map);
+
+      var hasAnyTileLoaded = false;
+      var offlineTileErrors = 0;
+      var wasOfflineSent = false;
+
+      function postToNative(msg) {
+        if (window.ReactNativeWebView) {
+          window.ReactNativeWebView.postMessage(msg);
+        }
+      }
+
+      function attachOfflineDetector(layer) {
+        layer.on('tileload', function () {
+          hasAnyTileLoaded = true;
+          offlineTileErrors = 0;
+          if (wasOfflineSent) {
+            wasOfflineSent = false;
+            postToNative('TILES_ONLINE');
+          }
+        });
+        layer.on('tileerror', function () {
+          offlineTileErrors++;
+          if (offlineTileErrors >= 3 && !hasAnyTileLoaded && !wasOfflineSent) {
+            wasOfflineSent = true;
+            postToNative('TILES_OFFLINE');
+          }
+        });
+      }
 
       var primaryTiles = L.tileLayer(
         ${JSON.stringify(hasCartoKey ? cartoTileUrl : osmTileUrl)},
@@ -100,6 +139,15 @@ function buildLeafletHtml(
         }
       ).addTo(map);
 
+      primaryTiles.on('tileload', function () {
+        hasAnyTileLoaded = true;
+        offlineTileErrors = 0;
+        if (wasOfflineSent) {
+          wasOfflineSent = false;
+          postToNative('TILES_ONLINE');
+        }
+      });
+
       if (${isDark ? 'true' : 'false'} && ${hasCartoKey ? 'false' : 'true'}) {
         var tilePaneInit = document.querySelector('.leaflet-tile-pane');
         if (tilePaneInit) tilePaneInit.classList.add('osm-dark-fallback');
@@ -114,16 +162,17 @@ function buildLeafletHtml(
         if (tileErrors >= 3 && !fallbackLoaded) {
           fallbackLoaded = true;
           map.removeLayer(primaryTiles);
-          L.tileLayer(${JSON.stringify(osmTileUrl)}, {
+          var osmFallback = L.tileLayer(${JSON.stringify(osmTileUrl)}, {
             maxZoom: 19
           }).addTo(map);
+          attachOfflineDetector(osmFallback);
           if (${isDark ? 'true' : 'false'}) {
             var tilePane = document.querySelector('.leaflet-tile-pane');
             if (tilePane) tilePane.classList.add('osm-dark-fallback');
           }
         }
       });`
-          : ''
+          : `attachOfflineDetector(primaryTiles);`
       }
 
       var routeLine = null;
@@ -273,6 +322,7 @@ export function WorkoutMap({ currentLocation, routeCoordinates, isTracking }: Wo
   const { palette, isDark, language, t } = usePreferences();
   const webViewRef = useRef<WebView<WebViewProps> | null>(null);
   const isMapReadyRef = useRef(false);
+  const [offlineHtmlKey, setOfflineHtmlKey] = useState<string | null>(null);
   const [initialAnchor] = useState<{ latitude: number; longitude: number } | null>(
     () => currentLocation
   );
@@ -328,6 +378,8 @@ export function WorkoutMap({ currentLocation, routeCoordinates, isTracking }: Wo
     );
   }, []);
 
+  const tilesOffline = offlineHtmlKey === webSource.html;
+
   useEffect(() => {
     isMapReadyRef.current = false;
   }, [webSource]);
@@ -339,12 +391,17 @@ export function WorkoutMap({ currentLocation, routeCoordinates, isTracking }: Wo
 
   const handleWebViewMessage = useCallback(
     (event: WebViewMessageEvent) => {
-      if (event.nativeEvent.data === 'MAP_READY') {
+      const msg = event.nativeEvent.data;
+      if (msg === 'MAP_READY') {
         isMapReadyRef.current = true;
         pushLatestToWebView();
+      } else if (msg === 'TILES_OFFLINE') {
+        setOfflineHtmlKey(webSource.html);
+      } else if (msg === 'TILES_ONLINE') {
+        setOfflineHtmlKey(null);
       }
     },
-    [pushLatestToWebView]
+    [pushLatestToWebView, webSource.html]
   );
 
   const handleLoadEnd = useCallback(() => {
@@ -392,6 +449,27 @@ export function WorkoutMap({ currentLocation, routeCoordinates, isTracking }: Wo
         scrollEnabled={false}
       />
 
+      {tilesOffline && (
+        <View
+          pointerEvents="none"
+          style={[
+            styles.offlineBadge,
+            {
+              backgroundColor: palette.surfaceRaised,
+              borderColor: palette.border,
+            },
+          ]}
+        >
+          <WifiOff size={12} strokeWidth={2} color={palette.onSurfaceVariant} />
+          <Text
+            style={[styles.offlineBadgeText, { color: palette.onSurfaceVariant }]}
+            numberOfLines={1}
+          >
+            {t.map.offlineBadge}
+          </Text>
+        </View>
+      )}
+
       {(currentLocation || routeCoordinates.length > 1) && (
         <Pressable
           accessibilityRole="button"
@@ -428,6 +506,21 @@ const styles = StyleSheet.create({
     borderRadius: RADIUS.full,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  offlineBadge: {
+    position: 'absolute',
+    top: 12,
+    left: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: 5,
+    borderRadius: RADIUS.full,
+    borderWidth: 1,
+  },
+  offlineBadgeText: {
+    ...TYPOGRAPHY.labelSm,
   },
   webFallbackContainer: {
     flex: 1,

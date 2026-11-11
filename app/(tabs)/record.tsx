@@ -19,7 +19,7 @@ import {
 } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import { useWorkoutSession } from '@/hooks/useWorkoutSession';
-import { useSpotifyPlayer } from '@/hooks/useSpotifyPlayer';
+import { useSpotifyPlayer, useSpotifyPlayerFocus } from '@/hooks/useSpotifyPlayer';
 import { LiveStatsHUD } from '@/components/workout/LiveStatsHUD';
 import { WorkoutControls } from '@/components/workout/WorkoutControls';
 import { WorkoutMap } from '@/components/map/WorkoutMap';
@@ -80,6 +80,7 @@ export default function RecordScreen() {
   } = useWorkoutSession();
 
   const { currentTrack } = useSpotifyPlayer();
+  useSpotifyPlayerFocus();
 
   const [selectedType, setSelectedType] = useState<WorkoutType>('run');
   const [viewMode, setViewMode] = useState<'map' | 'splits'>('map');

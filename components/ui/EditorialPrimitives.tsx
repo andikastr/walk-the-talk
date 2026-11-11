@@ -145,20 +145,22 @@ export function TopAppBar({
   );
 }
 
+export type ActivitySummaryItem = Omit<WorkoutRecord, 'routePoints' | 'splits'>;
+
 /**
  * Kartu baris aktivitas ("list-row" / "card-raised") sesuai DESIGN.md:
  * thumbnail gelap 72x72 (radius 18), kicker + judul + metrik tabular dengan ember untuk kalori.
  */
-export function ActivityRowCard({
+export const ActivityRowCard = React.memo(function ActivityRowCard({
   workout,
   dateFormat = 'short',
   onPress,
   onDelete,
 }: {
-  workout: Omit<WorkoutRecord, 'routePoints' | 'splits'>;
+  workout: ActivitySummaryItem;
   dateFormat?: 'short' | 'full';
-  onPress: () => void;
-  onDelete?: () => void;
+  onPress: (workout: ActivitySummaryItem) => void;
+  onDelete?: (workout: ActivitySummaryItem) => void;
 }) {
   const { palette, isDark, locale, t } = usePreferences();
 
@@ -198,7 +200,7 @@ export function ActivityRowCard({
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={`${workout.title}, ${distKm} ${t.common.kmUnit}`}
-      onPress={onPress}
+      onPress={() => onPress(workout)}
       style={({ pressed }) => [
         styles.listRow,
         { backgroundColor: palette.surfaceRaised },
@@ -258,7 +260,7 @@ export function ActivityRowCard({
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={t.history.deleteA11y(workout.title)}
-            onPress={onDelete}
+            onPress={() => onDelete(workout)}
             hitSlop={10}
             style={({ pressed }) => [styles.deleteTouch, pressed && { opacity: 0.55 }]}
           >
@@ -269,7 +271,7 @@ export function ActivityRowCard({
       </View>
     </Pressable>
   );
-}
+});
 
 const styles = StyleSheet.create({
   iconButton: {

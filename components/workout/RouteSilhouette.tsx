@@ -4,6 +4,7 @@ import Svg, { Polyline, Circle } from 'react-native-svg';
 import { Route } from 'lucide-react-native';
 import { GPSCoordinate } from '@/types/workout';
 import { PALETTE } from '@/constants/Colors';
+import { simplifyRouteForSilhouette } from '@/services/location/route-simplify';
 
 interface RouteSilhouetteProps {
   routePoints: GPSCoordinate[];
@@ -35,26 +36,32 @@ export function RouteSilhouette({
       return null;
     }
 
-    // Downsampling ringan agar rute panjang tetap cepat dirender di SVG
-    let sampled = routePoints;
-    if (routePoints.length > MAX_RENDER_POINTS) {
-      const step = Math.ceil(routePoints.length / MAX_RENDER_POINTS);
-      sampled = routePoints.filter(
-        (_, idx) => idx === 0 || idx === routePoints.length - 1 || idx % step === 0
-      );
+    const simplifiedSegments = simplifyRouteForSilhouette(
+      routePoints,
+      MAX_RENDER_POINTS
+    );
+    const sampled = simplifiedSegments.flat();
+    if (sampled.length < 2) {
+      return null;
     }
 
     const avgLat =
       sampled.reduce((sum, pt) => sum + pt.latitude, 0) / sampled.length;
     const cosLat = Math.max(0.1, Math.cos((avgLat * Math.PI) / 180));
 
-    const xs = sampled.map((pt) => pt.longitude * cosLat);
-    const ys = sampled.map((pt) => -pt.latitude);
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
 
-    const minX = Math.min(...xs);
-    const maxX = Math.max(...xs);
-    const minY = Math.min(...ys);
-    const maxY = Math.max(...ys);
+    for (const pt of sampled) {
+      const x = pt.longitude * cosLat;
+      const y = -pt.latitude;
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
 
     const spanX = maxX - minX;
     const spanY = maxY - minY;
@@ -80,36 +87,30 @@ export function RouteSilhouette({
     const offsetX = padding + (drawW - renderedW) / 2;
     const offsetY = padding + (drawH - renderedH) / 2;
 
-    const coords = sampled.map((pt, idx) => ({
-      x: Number((offsetX + (xs[idx] - minX) * scale).toFixed(1)),
-      y: Number((offsetY + (ys[idx] - minY) * scale).toFixed(1)),
-      segmentIndex: pt.segmentIndex ?? 0,
-    }));
+    const project = (pt: GPSCoordinate) => ({
+      x: Number((offsetX + (pt.longitude * cosLat - minX) * scale).toFixed(1)),
+      y: Number((offsetY + (-pt.latitude - minY) * scale).toFixed(1)),
+    });
 
     const segmentAttrs: string[] = [];
-    let currentSeg: { x: number; y: number }[] = [];
-    let currentSegIdx: number | null = null;
-
-    for (const pt of coords) {
-      if (currentSegIdx === null || pt.segmentIndex !== currentSegIdx) {
-        if (currentSeg.length > 1) {
-          segmentAttrs.push(currentSeg.map((p) => `${p.x},${p.y}`).join(' '));
-        }
-        currentSeg = [{ x: pt.x, y: pt.y }];
-        currentSegIdx = pt.segmentIndex;
-      } else {
-        currentSeg.push({ x: pt.x, y: pt.y });
+    for (const seg of simplifiedSegments) {
+      if (seg.length > 1) {
+        segmentAttrs.push(
+          seg
+            .map((pt) => {
+              const p = project(pt);
+              return `${p.x},${p.y}`;
+            })
+            .join(' ')
+        );
       }
-    }
-    if (currentSeg.length > 1) {
-      segmentAttrs.push(currentSeg.map((p) => `${p.x},${p.y}`).join(' '));
     }
 
     return {
       isSingleSpot: segmentAttrs.length === 0,
       segmentAttrs,
-      start: coords[0],
-      end: coords[coords.length - 1],
+      start: project(sampled[0]),
+      end: project(sampled[sampled.length - 1]),
     };
   }, [routePoints, width, height, padding]);
 

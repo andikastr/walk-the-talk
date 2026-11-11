@@ -17,11 +17,19 @@ import {
   SlidersHorizontal,
 } from 'lucide-react-native';
 import { FONT_FAMILY, RADIUS, SPACING, TYPOGRAPHY } from '@/constants/Colors';
-import { getWorkoutStats, getAllWorkouts } from '@/services/database/workout-repo';
-import { WorkoutRecord, WorkoutStats } from '@/types/workout';
+import {
+  getRecentWorkouts,
+  getWeeklyDailySummary,
+  getWorkoutStats,
+  WeeklyDailySummaryResult,
+  WeeklyDayBucketInput,
+  WorkoutSummary,
+} from '@/services/database/workout-repo';
+import { WorkoutStats } from '@/types/workout';
 import { formatDuration, formatSteps } from '@/services/location/metrics';
 import { RunnerMiniPlayer } from '@/components/spotify/RunnerMiniPlayer';
 import { useSpotifyAuth } from '@/hooks/useSpotifyAuth';
+import { useSpotifyPlayerFocus } from '@/hooks/useSpotifyPlayer';
 import { usePreferences } from '@/context/AppPreferencesContext';
 import { useAppUpdates } from '@/hooks/useAppUpdates';
 import { PreferencesModal } from '@/components/ui/PreferencesModal';
@@ -32,11 +40,44 @@ import {
   TopAppBar,
 } from '@/components/ui/EditorialPrimitives';
 
+interface LocalDayBucket extends WeeklyDayBucketInput {
+  dayOfWeek: number;
+  isToday: boolean;
+}
+
+function buildLast7DayBuckets(): LocalDayBucket[] {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const buckets: LocalDayBucket[] = [];
+  for (let i = 6; i >= 0; i--) {
+    const start = new Date(today);
+    start.setDate(today.getDate() - i);
+    const end = new Date(start);
+    end.setDate(start.getDate() + 1);
+
+    const yyyy = start.getFullYear();
+    const mm = String(start.getMonth() + 1).padStart(2, '0');
+    const dd = String(start.getDate()).padStart(2, '0');
+
+    buckets.push({
+      key: `${yyyy}-${mm}-${dd}`,
+      startMs: start.getTime(),
+      endMs: end.getTime(),
+      dayOfWeek: start.getDay(),
+      isToday: i === 0,
+    });
+  }
+  return buckets;
+}
+
 export default function HomeScreen() {
   const router = useRouter();
   const { user } = useSpotifyAuth();
   const { palette, isDark, t } = usePreferences();
   const { isUpdatePending } = useAppUpdates();
+  useSpotifyPlayerFocus();
+
   const [preferencesVisible, setPreferencesVisible] = useState(false);
   const [stats, setStats] = useState<WorkoutStats>({
     totalDistanceMeters: 0,
@@ -45,19 +86,27 @@ export default function HomeScreen() {
     totalCaloriesKcal: 0,
     totalSteps: 0,
   });
-  const [allWorkouts, setAllWorkouts] = useState<
-    Omit<WorkoutRecord, 'routePoints' | 'splits'>[]
-  >([]);
+  const [recentWorkouts, setRecentWorkouts] = useState<WorkoutSummary[]>([]);
+  const [weeklyState, setWeeklyState] = useState<{
+    buckets: LocalDayBucket[];
+    summary: WeeklyDailySummaryResult;
+  }>(() => ({
+    buckets: buildLast7DayBuckets(),
+    summary: { byKey: {}, totalMeters: 0, totalSessions: 0 },
+  }));
   const [refreshing, setRefreshing] = useState(false);
 
   const loadData = useCallback(async () => {
     try {
-      const [loadedStats, loadedWorkouts] = await Promise.all([
+      const buckets = buildLast7DayBuckets();
+      const [loadedStats, loadedRecent, loadedWeekly] = await Promise.all([
         getWorkoutStats(),
-        getAllWorkouts(),
+        getRecentWorkouts(5),
+        getWeeklyDailySummary(buckets),
       ]);
       setStats(loadedStats);
-      setAllWorkouts(loadedWorkouts);
+      setRecentWorkouts(loadedRecent);
+      setWeeklyState({ buckets, summary: loadedWeekly });
     } catch (err) {
       console.error('Error loading dashboard data:', err);
     }
@@ -75,51 +124,13 @@ export default function HomeScreen() {
     setRefreshing(false);
   };
 
-  const recentWorkouts = useMemo(() => allWorkouts.slice(0, 5), [allWorkouts]);
-
-  // Hitung metrik 7 hari terakhir + data bar chart harian
+  // Hitung bar chart harian dari hasil agregasi SQL 7 hari terakhir
   const { weeklyBars, weeklyKm, weeklySessions } = useMemo(() => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    const days: { key: string; label: string; km: number; isToday: boolean }[] = [];
-    const dayMap = new Map<string, number>();
-
-    for (let i = 6; i >= 0; i--) {
-      const d = new Date(today);
-      d.setDate(today.getDate() - i);
-      const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
-      days.push({
-        key,
-        label: t.weekdaysShort[d.getDay()],
-        km: 0,
-        isToday: i === 0,
-      });
-      dayMap.set(key, 0);
-    }
-
-    const weekStart = new Date(today);
-    weekStart.setDate(today.getDate() - 6);
-    const weekStartMs = weekStart.getTime();
-
-    let totalWeekMeters = 0;
-    let totalWeekCount = 0;
-
-    for (const w of allWorkouts) {
-      if (w.startTime >= weekStartMs) {
-        totalWeekMeters += w.distanceMeters;
-        totalWeekCount += 1;
-        const d = new Date(w.startTime);
-        const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
-        if (dayMap.has(key)) {
-          dayMap.set(key, (dayMap.get(key) || 0) + w.distanceMeters / 1000);
-        }
-      }
-    }
-
-    const barsWithKm = days.map((d) => ({
-      ...d,
-      km: dayMap.get(d.key) || 0,
+    const barsWithKm = weeklyState.buckets.map((bucket) => ({
+      key: bucket.key,
+      label: t.weekdaysShort[bucket.dayOfWeek],
+      km: (weeklyState.summary.byKey[bucket.key]?.totalMeters || 0) / 1000,
+      isToday: bucket.isToday,
     }));
 
     const maxKm = Math.max(...barsWithKm.map((b) => b.km), 1);
@@ -129,10 +140,17 @@ export default function HomeScreen() {
         ...b,
         ratio: b.km > 0 ? Math.max(b.km / maxKm, 0.14) : 0,
       })),
-      weeklyKm: (totalWeekMeters / 1000).toFixed(1),
-      weeklySessions: totalWeekCount,
+      weeklyKm: (weeklyState.summary.totalMeters / 1000).toFixed(1),
+      weeklySessions: weeklyState.summary.totalSessions,
     };
-  }, [allWorkouts, t.weekdaysShort]);
+  }, [t.weekdaysShort, weeklyState]);
+
+  const handleOpenWorkout = useCallback(
+    (workout: WorkoutSummary) => {
+      router.push(`/workout/${workout.id}` as any);
+    },
+    [router]
+  );
 
   const totalKm = (stats.totalDistanceMeters / 1000).toFixed(1);
   const darkSurfaceBorder = isDark ? { borderWidth: 1, borderColor: palette.border } : undefined;
@@ -390,7 +408,7 @@ export default function HomeScreen() {
                 key={workout.id}
                 workout={workout}
                 dateFormat="short"
-                onPress={() => router.push(`/workout/${workout.id}` as any)}
+                onPress={handleOpenWorkout}
               />
             ))
           )}

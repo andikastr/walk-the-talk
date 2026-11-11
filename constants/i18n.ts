@@ -48,9 +48,6 @@ const idDict = {
     notFoundKicker: '404 · HALAMAN TIDAK ADA',
     notFoundHeading: 'Halaman ini tidak ditemukan.',
     notFoundCta: 'Kembali ke Beranda',
-    infoKicker: 'WALK THE TALK',
-    infoTitle: 'Info',
-    infoBody: 'Pelacak rute lari & kendali pemutar Spotify.',
   },
   activityTypes: {
     walk: 'Jalan',
@@ -203,6 +200,7 @@ const idDict = {
   map: {
     webFallback: 'Peta Interaktif tersedia di perangkat Android & iOS.',
     centerA11y: 'Pusatkan peta ke lokasi saya',
+    offlineBadge: 'Peta dasar offline · Rute aktif',
   },
   saveModal: {
     kicker: 'SESI SELESAI',
@@ -417,9 +415,6 @@ const enDict: typeof idDict = {
     notFoundKicker: '404 · PAGE NOT FOUND',
     notFoundHeading: 'This page could not be found.',
     notFoundCta: 'Back to Home',
-    infoKicker: 'WALK THE TALK',
-    infoTitle: 'Info',
-    infoBody: 'Route tracker & Spotify player controls for your runs.',
   },
   activityTypes: {
     walk: 'Walk',
@@ -572,6 +567,7 @@ const enDict: typeof idDict = {
   map: {
     webFallback: 'Interactive map is available on Android & iOS devices.',
     centerA11y: 'Center map on my location',
+    offlineBadge: 'Offline basemap · Route active',
   },
   saveModal: {
     kicker: 'SESSION COMPLETE',

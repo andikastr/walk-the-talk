@@ -1,16 +1,25 @@
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo, useRef } from 'react';
 import {
-  StyleSheet,
-  View,
-  Text,
+  ActivityIndicator,
   FlatList,
+  ListRenderItemInfo,
+  Platform,
   Pressable,
   RefreshControl,
+  StyleSheet,
+  Text,
+  View,
 } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { Calendar, Play } from 'lucide-react-native';
-import { getAllWorkouts, deleteWorkout, getWorkoutStats } from '@/services/database/workout-repo';
-import { WorkoutRecord, WorkoutStats, WorkoutType } from '@/types/workout';
+import {
+  deleteWorkout,
+  getWorkoutsPage,
+  getWorkoutStats,
+  WorkoutPageCursor,
+  WorkoutSummary,
+} from '@/services/database/workout-repo';
+import { WorkoutStats, WorkoutType } from '@/types/workout';
 import { RADIUS, SPACING, TYPOGRAPHY } from '@/constants/Colors';
 import { getActivityLabel } from '@/constants/i18n';
 import { formatSteps } from '@/services/location/metrics';
@@ -25,143 +34,228 @@ import {
 } from '@/components/ui/EditorialPrimitives';
 
 type FilterType = 'all' | WorkoutType;
+const PAGE_SIZE = 25;
 
 export default function HistoryScreen() {
   const router = useRouter();
   const { user } = useSpotifyAuth();
   const { palette, isDark, t } = usePreferences();
   const { confirm } = useAppDialog();
-  const [workouts, setWorkouts] = useState<Omit<WorkoutRecord, 'routePoints' | 'splits'>[]>([]);
+  const [workouts, setWorkouts] = useState<WorkoutSummary[]>([]);
   const [stats, setStats] = useState<WorkoutStats | null>(null);
   const [filter, setFilter] = useState<FilterType>('all');
   const [refreshing, setRefreshing] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
 
-  const loadWorkouts = useCallback(async () => {
+  const nextCursorRef = useRef<WorkoutPageCursor | null>(null);
+  const isLoadingMoreRef = useRef(false);
+  const requestIdRef = useRef(0);
+
+  const loadFirstPage = useCallback(async (targetFilter: FilterType) => {
+    const requestId = ++requestIdRef.current;
     try {
-      const [data, aggregated] = await Promise.all([getAllWorkouts(), getWorkoutStats()]);
-      setWorkouts(data);
+      const [page, aggregated] = await Promise.all([
+        getWorkoutsPage({ limit: PAGE_SIZE, type: targetFilter, cursor: null }),
+        getWorkoutStats(),
+      ]);
+      if (requestId !== requestIdRef.current) return;
+      nextCursorRef.current = page.nextCursor;
+      setHasMore(page.hasMore);
+      setWorkouts(page.items);
       setStats(aggregated);
     } catch (err) {
       console.error('Gagal memuat riwayat latihan:', err);
     }
   }, []);
 
+  const loadMore = useCallback(async () => {
+    if (!hasMore || isLoadingMoreRef.current || !nextCursorRef.current) return;
+
+    const requestId = requestIdRef.current;
+    isLoadingMoreRef.current = true;
+    setIsLoadingMore(true);
+
+    try {
+      const page = await getWorkoutsPage({
+        limit: PAGE_SIZE,
+        type: filter,
+        cursor: nextCursorRef.current,
+      });
+      if (requestId !== requestIdRef.current) return;
+
+      nextCursorRef.current = page.nextCursor;
+      setHasMore(page.hasMore);
+      setWorkouts((prev) => {
+        if (page.items.length === 0) return prev;
+        const seen = new Set(prev.map((w) => w.id));
+        const uniqueNext = page.items.filter((w) => !seen.has(w.id));
+        return uniqueNext.length > 0 ? [...prev, ...uniqueNext] : prev;
+      });
+    } catch (err) {
+      console.error('Gagal memuat halaman riwayat berikutnya:', err);
+    } finally {
+      isLoadingMoreRef.current = false;
+      setIsLoadingMore(false);
+    }
+  }, [filter, hasMore]);
+
   useFocusEffect(
     useCallback(() => {
-      loadWorkouts();
-    }, [loadWorkouts])
+      void loadFirstPage(filter);
+    }, [filter, loadFirstPage])
   );
 
-  const onRefresh = async () => {
+  const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await loadWorkouts();
+    await loadFirstPage(filter);
     setRefreshing(false);
-  };
+  }, [filter, loadFirstPage]);
 
-  const handleDelete = async (id: string, title: string) => {
-    const confirmed = await confirm({
-      kicker: t.common.warningKicker,
-      title: t.history.deleteTitle,
-      message: t.history.deleteMessage(title),
-      cancelText: t.common.cancel,
-      confirmText: t.history.deleteAction,
-      destructive: true,
-    });
-    if (confirmed) {
-      await deleteWorkout(id);
-      await loadWorkouts();
-    }
-  };
+  const handleOpenWorkout = useCallback(
+    (workout: WorkoutSummary) => {
+      router.push(`/workout/${workout.id}` as any);
+    },
+    [router]
+  );
 
-  const filteredWorkouts = useMemo(() => {
-    if (filter === 'all') return workouts;
-    return workouts.filter((w) => w.type === filter);
-  }, [workouts, filter]);
+  const handleDelete = useCallback(
+    async (workout: WorkoutSummary) => {
+      const confirmed = await confirm({
+        kicker: t.common.warningKicker,
+        title: t.history.deleteTitle,
+        message: t.history.deleteMessage(workout.title),
+        cancelText: t.common.cancel,
+        confirmText: t.history.deleteAction,
+        destructive: true,
+      });
+      if (confirmed) {
+        await deleteWorkout(workout.id);
+        setWorkouts((prev) => prev.filter((item) => item.id !== workout.id));
+        const aggregated = await getWorkoutStats();
+        setStats(aggregated);
+      }
+    },
+    [confirm, t]
+  );
 
-  const filterChips: { key: FilterType; label: string }[] = [
-    { key: 'all', label: t.common.all },
-    { key: 'run', label: getActivityLabel('run', t) },
-    { key: 'jog', label: getActivityLabel('jog', t) },
-    { key: 'walk', label: getActivityLabel('walk', t) },
-  ];
+  const filterChips = useMemo<{ key: FilterType; label: string }[]>(
+    () => [
+      { key: 'all', label: t.common.all },
+      { key: 'run', label: getActivityLabel('run', t) },
+      { key: 'jog', label: getActivityLabel('jog', t) },
+      { key: 'walk', label: getActivityLabel('walk', t) },
+    ],
+    [t]
+  );
 
-  const darkSurfaceBorder = isDark ? { borderWidth: 1, borderColor: palette.border } : undefined;
+  const darkSurfaceBorder = useMemo(
+    () => (isDark ? { borderWidth: 1, borderColor: palette.border } : undefined),
+    [isDark, palette.border]
+  );
 
-  const renderHeader = () => (
-    <View style={styles.listHeader}>
-      {/* Overview 2x2 Data Strip */}
-      {stats && (
-        <View
-          style={[
-            styles.statsBanner,
-            { backgroundColor: palette.surfaceAlt },
-            darkSurfaceBorder,
-          ]}
-        >
-          <View style={styles.statsCol}>
-            <KickerText style={styles.statsLbl}>{t.history.totalKmLabel}</KickerText>
-            <Text style={[styles.statsNumEmber, { color: palette.accent }]}>
-              {(stats.totalDistanceMeters / 1000).toFixed(1)}
-            </Text>
+  const listHeader = useMemo(
+    () => (
+      <View style={styles.listHeader}>
+        {/* Overview 2x2 Data Strip */}
+        {stats && (
+          <View
+            style={[
+              styles.statsBanner,
+              { backgroundColor: palette.surfaceAlt },
+              darkSurfaceBorder,
+            ]}
+          >
+            <View style={styles.statsCol}>
+              <KickerText style={styles.statsLbl}>{t.history.totalKmLabel}</KickerText>
+              <Text style={[styles.statsNumEmber, { color: palette.accent }]}>
+                {(stats.totalDistanceMeters / 1000).toFixed(1)}
+              </Text>
+            </View>
+
+            <View style={styles.statsCol}>
+              <KickerText style={styles.statsLbl}>{t.history.activitiesLabel}</KickerText>
+              <Text style={[styles.statsNum, { color: palette.onSurface }]}>
+                {stats.totalWorkouts}
+              </Text>
+            </View>
+
+            <View style={styles.statsCol}>
+              <KickerText style={styles.statsLbl}>{t.history.totalStepsLabel}</KickerText>
+              <Text style={[styles.statsNum, { color: palette.onSurface }]}>
+                {formatSteps(stats.totalSteps)}
+              </Text>
+            </View>
+
+            <View style={styles.statsCol}>
+              <KickerText style={styles.statsLbl}>{t.history.kcalLabel}</KickerText>
+              <Text style={[styles.statsNum, { color: palette.onSurface }]}>
+                {stats.totalCaloriesKcal}
+              </Text>
+            </View>
           </View>
+        )}
 
-          <View style={styles.statsCol}>
-            <KickerText style={styles.statsLbl}>{t.history.activitiesLabel}</KickerText>
-            <Text style={[styles.statsNum, { color: palette.onSurface }]}>
-              {stats.totalWorkouts}
-            </Text>
-          </View>
-
-          <View style={styles.statsCol}>
-            <KickerText style={styles.statsLbl}>{t.history.totalStepsLabel}</KickerText>
-            <Text style={[styles.statsNum, { color: palette.onSurface }]}>
-              {formatSteps(stats.totalSteps)}
-            </Text>
-          </View>
-
-          <View style={styles.statsCol}>
-            <KickerText style={styles.statsLbl}>{t.history.kcalLabel}</KickerText>
-            <Text style={[styles.statsNum, { color: palette.onSurface }]}>
-              {stats.totalCaloriesKcal}
-            </Text>
-          </View>
-        </View>
-      )}
-
-      {/* Filter Chips per DESIGN.md (chip / chip-active) */}
-      <View style={styles.chipRow}>
-        {filterChips.map((chip) => {
-          const isActive = filter === chip.key;
-          return (
-            <Pressable
-              key={chip.key}
-              accessibilityRole="button"
-              accessibilityState={{ selected: isActive }}
-              onPress={() => setFilter(chip.key)}
-              style={({ pressed }) => [
-                styles.chip,
-                {
-                  backgroundColor: isActive ? palette.actionPrimary : palette.surfaceAlt,
-                },
-                !isActive && darkSurfaceBorder,
-                pressed && { opacity: 0.78 },
-              ]}
-            >
-              <Text
-                style={[
-                  styles.chipText,
+        {/* Filter Chips per DESIGN.md (chip / chip-active) */}
+        <View style={styles.chipRow}>
+          {filterChips.map((chip) => {
+            const isActive = filter === chip.key;
+            return (
+              <Pressable
+                key={chip.key}
+                accessibilityRole="button"
+                accessibilityState={{ selected: isActive }}
+                onPress={() => setFilter(chip.key)}
+                style={({ pressed }) => [
+                  styles.chip,
                   {
-                    color: isActive ? palette.onActionPrimary : palette.onSurfaceVariant,
+                    backgroundColor: isActive ? palette.actionPrimary : palette.surfaceAlt,
                   },
+                  !isActive && darkSurfaceBorder,
+                  pressed && { opacity: 0.78 },
                 ]}
               >
-                {chip.label}
-              </Text>
-            </Pressable>
-          );
-        })}
+                <Text
+                  style={[
+                    styles.chipText,
+                    {
+                      color: isActive ? palette.onActionPrimary : palette.onSurfaceVariant,
+                    },
+                  ]}
+                >
+                  {chip.label}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
       </View>
-    </View>
+    ),
+    [darkSurfaceBorder, filter, filterChips, palette, stats, t]
+  );
+
+  const listFooter = useMemo(
+    () =>
+      isLoadingMore ? (
+        <View style={styles.footerLoader}>
+          <ActivityIndicator size="small" color={palette.accent} />
+        </View>
+      ) : undefined,
+    [isLoadingMore, palette.accent]
+  );
+
+  const keyExtractor = useCallback((item: WorkoutSummary) => item.id, []);
+
+  const renderItem = useCallback(
+    ({ item }: ListRenderItemInfo<WorkoutSummary>) => (
+      <ActivityRowCard
+        workout={item}
+        dateFormat="full"
+        onPress={handleOpenWorkout}
+        onDelete={handleDelete}
+      />
+    ),
+    [handleDelete, handleOpenWorkout]
   );
 
   return (
@@ -180,11 +274,20 @@ export default function HistoryScreen() {
       />
 
       <FlatList
-        data={filteredWorkouts}
-        keyExtractor={(item) => item.id}
-        ListHeaderComponent={renderHeader}
+        data={workouts}
+        keyExtractor={keyExtractor}
+        renderItem={renderItem}
+        ListHeaderComponent={listHeader}
+        ListFooterComponent={listFooter}
         contentContainerStyle={styles.listContent}
         showsVerticalScrollIndicator={false}
+        initialNumToRender={10}
+        maxToRenderPerBatch={8}
+        updateCellsBatchingPeriod={50}
+        windowSize={7}
+        removeClippedSubviews={Platform.OS === 'android'}
+        onEndReached={loadMore}
+        onEndReachedThreshold={0.4}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -209,14 +312,6 @@ export default function HistoryScreen() {
             </Text>
           </View>
         }
-        renderItem={({ item }) => (
-          <ActivityRowCard
-            workout={item}
-            dateFormat="full"
-            onPress={() => router.push(`/workout/${item.id}` as any)}
-            onDelete={() => void handleDelete(item.id, item.title)}
-          />
-        )}
       />
     </View>
   );
@@ -268,6 +363,10 @@ const styles = StyleSheet.create({
   listContent: {
     paddingHorizontal: SPACING.gutter,
     paddingBottom: 112,
+  },
+  footerLoader: {
+    paddingVertical: SPACING.lg,
+    alignItems: 'center',
   },
   emptyContainer: {
     borderRadius: RADIUS.lg,

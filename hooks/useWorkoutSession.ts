@@ -133,7 +133,12 @@ export function useWorkoutSession() {
         cp.type,
         elapsedSec,
         cp.distanceMeters,
-        cp.weightKg || weightKgRef.current
+        cp.weightKg || weightKgRef.current,
+        {
+          elevationGainMeters: cp.elevationGainMeters,
+          isIndoor: cp.trackingMode === 'indoor',
+          splits: cp.splits,
+        }
       );
       const avgPace = calculatePaceSeconds(cp.distanceMeters, elapsedSec);
       const cadence = calculateCadenceSpm(cp.steps, elapsedSec);
@@ -193,7 +198,11 @@ export function useWorkoutSession() {
     setDurationSeconds(elapsedSec);
     setAvgPaceSeconds(calculatePaceSeconds(cp.distanceMeters, elapsedSec));
     setCaloriesKcal(
-      estimateCalories(cp.type, elapsedSec, cp.distanceMeters, cp.weightKg || weightKgRef.current)
+      estimateCalories(cp.type, elapsedSec, cp.distanceMeters, cp.weightKg || weightKgRef.current, {
+        elevationGainMeters: cp.elevationGainMeters,
+        isIndoor: cp.trackingMode === 'indoor',
+        splits: cp.splits,
+      })
     );
     setAvgCadenceSpm(calculateCadenceSpm(cp.steps, elapsedSec));
 
@@ -879,11 +888,19 @@ export function useWorkoutSession() {
       const finalSteps = cp ? cp.steps : steps;
       const finalType = cp ? cp.type : workoutType;
       const finalWeight = cp ? cp.weightKg : weightKgRef.current;
+      const finalElev = cp?.elevationGainMeters ?? elevationGainMeters;
+      const finalIsIndoor = (cp?.trackingMode ?? trackingModeRef.current) === 'indoor';
+      const finalSplits = cp?.splits ?? splits;
       const finalCalories = estimateCalories(
         finalType,
         finalDuration,
         finalDistance,
-        finalWeight
+        finalWeight,
+        {
+          elevationGainMeters: finalElev,
+          isIndoor: finalIsIndoor,
+          splits: finalSplits,
+        }
       );
       const finalAvgPace = calculatePaceSeconds(finalDistance, finalDuration);
 

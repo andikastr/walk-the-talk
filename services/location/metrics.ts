@@ -85,35 +85,115 @@ export function formatPace(paceSeconds: number): string {
   return `${mins}'${secs.toString().padStart(2, '0')}"`;
 }
 
+export interface EstimateCaloriesOptions {
+  elevationGainMeters?: number;
+  isIndoor?: boolean;
+  splits?: WorkoutSplit[];
+}
+
+function interpolateMet(
+  speedKmH: number,
+  anchors: readonly [number, number][]
+): number {
+  if (!Number.isFinite(speedKmH) || speedKmH <= anchors[0][0]) {
+    return anchors[0][1];
+  }
+  const lastIdx = anchors.length - 1;
+  if (speedKmH >= anchors[lastIdx][0]) {
+    return anchors[lastIdx][1];
+  }
+  for (let i = 1; i <= lastIdx; i++) {
+    const [x0, y0] = anchors[i - 1];
+    const [x1, y1] = anchors[i];
+    if (speedKmH <= x1) {
+      const ratio = (speedKmH - x0) / Math.max(1e-6, x1 - x0);
+      return y0 + (y1 - y0) * ratio;
+    }
+  }
+  return anchors[lastIdx][1];
+}
+
+export function resolveMetForSpeed(type: WorkoutType, speedKmH: number): number {
+  if (type === 'walk') {
+    return interpolateMet(speedKmH, [
+      [4.0, 3.5],
+      [5.5, 4.3],
+      [6.5, 4.8],
+    ]);
+  }
+  if (type === 'jog') {
+    return interpolateMet(speedKmH, [
+      [7.0, 7.0],
+      [8.5, 8.0],
+      [9.5, 8.5],
+    ]);
+  }
+  return interpolateMet(speedKmH, [
+    [9.5, 9.0],
+    [10.5, 10.0],
+    [12.0, 11.5],
+    [14.0, 12.5],
+  ]);
+}
+
 /**
- * Estimasi pembakaran kalori berdasarkan MET (Metabolic Equivalent of Task)
- * Formula: Calories (kcal) = MET * beratBadan (kg) * durasi (jam)
+ * Estimasi pembakaran kalori berdasarkan MET (Metabolic Equivalent of Task),
+ * mendukung agregasi per kilometer split + penyesuaian kerja vertikal tanjakan.
+ * Formula dasar: Calories (kcal) = MET * beratBadan (kg) * durasi (jam) + climbBonus
  */
 export function estimateCalories(
   type: WorkoutType,
   durationSeconds: number,
   distanceMeters: number,
-  weightKg: number = 65
+  weightKg: number = 65,
+  options?: EstimateCaloriesOptions
 ): number {
-  if (durationSeconds <= 0) return 0;
+  if (durationSeconds <= 0 || weightKg <= 0) return 0;
 
-  const durationHours = durationSeconds / 3600;
-  const speedKmH = distanceMeters > 0 ? (distanceMeters / 1000) / durationHours : 0;
+  let baseKcal = 0;
+  const splits = options?.splits;
+  const sumSplitSeconds =
+    splits && splits.length > 0
+      ? splits.reduce((sum, s) => sum + Math.max(0, s.durationSeconds), 0)
+      : 0;
 
-  let met = 3.5; // default jalan santai
+  if (
+    splits &&
+    splits.length > 0 &&
+    sumSplitSeconds > 0 &&
+    sumSplitSeconds <= durationSeconds + 5
+  ) {
+    for (const split of splits) {
+      const splitSec = Math.max(1, split.durationSeconds);
+      const splitHours = splitSec / 3600;
+      const splitSpeedKmH = 1 / splitHours;
+      baseKcal += resolveMetForSpeed(type, splitSpeedKmH) * weightKg * splitHours;
+    }
 
-  if (type === 'walk') {
-    met = speedKmH > 5.5 ? 4.3 : 3.5;
-  } else if (type === 'jog') {
-    met = speedKmH > 8 ? 8.0 : 7.0;
-  } else if (type === 'run') {
-    if (speedKmH >= 12) met = 11.5;
-    else if (speedKmH >= 10) met = 10.0;
-    else met = 9.0;
+    const remSec = Math.max(0, durationSeconds - sumSplitSeconds);
+    const remMeters = Math.max(0, distanceMeters - splits.length * 1000);
+    if (remSec > 0) {
+      const remHours = remSec / 3600;
+      const remSpeedKmH = remMeters > 0 ? (remMeters / 1000) / remHours : 0;
+      baseKcal += resolveMetForSpeed(type, remSpeedKmH) * weightKg * remHours;
+    }
+  } else {
+    const durationHours = durationSeconds / 3600;
+    const speedKmH = distanceMeters > 0 ? (distanceMeters / 1000) / durationHours : 0;
+    baseKcal = resolveMetForSpeed(type, speedKmH) * weightKg * durationHours;
   }
 
-  const kcal = met * weightKg * durationHours;
-  return Math.round(kcal);
+  // Tambahan kerja vertikal gravitasi saat menanjak (~0.01 kcal / kg / meter naik untuk efisiensi ~23%)
+  const elevGain =
+    !options?.isIndoor &&
+    typeof options?.elevationGainMeters === 'number' &&
+    Number.isFinite(options.elevationGainMeters) &&
+    options.elevationGainMeters > 0
+      ? options.elevationGainMeters
+      : 0;
+  const climbKcal = weightKg * elevGain * 0.01;
+
+  return Math.round(baseKcal + climbKcal);
 }
 
 /**
