@@ -1,16 +1,16 @@
 export type SharePreset = 'paper' | 'dark' | 'sticker';
-export type ShareAspectRatio = 'square' | 'portrait' | 'story';
+export type ShareAspectRatio = 'portrait' | 'story';
 
 export interface ShareCardLayout {
   ratio: ShareAspectRatio;
   width: number;
-  height: number;
+  height: number | undefined;
   padding: number;
+  hasMap: boolean;
   mapWidth: number;
   mapHeight: number;
-  metricColumns: 2 | 4;
+  metricColumns: 2;
   trackColumns: 1 | 2;
-  compactTitle: boolean;
 }
 
 interface RatioSpec {
@@ -20,24 +20,11 @@ interface RatioSpec {
   padding: number;
   minMapHeight: number;
   maxBaseMapHeight: number;
-  metricColumns: 2 | 4;
-  compactTitle: boolean;
   /** Header + hero distance + metric strip vertical footprint + safety buffer */
   baseChromeHeight: number;
 }
 
 const RATIO_SPECS: Record<ShareAspectRatio, RatioSpec> = {
-  square: {
-    unitW: 1,
-    unitH: 1,
-    baseMultiplier: 308,
-    padding: 14,
-    minMapHeight: 92,
-    maxBaseMapHeight: 150,
-    metricColumns: 4,
-    compactTitle: true,
-    baseChromeHeight: 158,
-  },
   portrait: {
     unitW: 3,
     unitH: 4,
@@ -45,8 +32,6 @@ const RATIO_SPECS: Record<ShareAspectRatio, RatioSpec> = {
     padding: 16,
     minMapHeight: 120,
     maxBaseMapHeight: 176,
-    metricColumns: 2,
-    compactTitle: false,
     baseChromeHeight: 236,
   },
   story: {
@@ -56,27 +41,40 @@ const RATIO_SPECS: Record<ShareAspectRatio, RatioSpec> = {
     padding: 16,
     minMapHeight: 148,
     maxBaseMapHeight: 268,
-    metricColumns: 2,
-    compactTitle: false,
     baseChromeHeight: 248,
   },
 };
 
 /**
- * Computes exact integer canvas dimensions preserving 1:1, 3:4, or 9:16 ratio while
- * ensuring all workout soundtracks fit cleanly without clipping.
+ * Computes card dimensions preserving 3:4 (Post) or 9:16 (Story) ratio when a map canvas is shown,
+ * or an auto-height compact layout when omitting the map for indoor workouts.
  */
 export function computeShareCardLayout(
   ratio: ShareAspectRatio,
-  trackCount: number
+  trackCount: number,
+  hasMap: boolean = true
 ): ShareCardLayout {
   const spec = RATIO_SPECS[ratio];
   const safeTracks = Math.max(0, Math.floor(trackCount));
   const trackColumns: 1 | 2 =
     safeTracks >= 2 && (ratio !== 'story' || safeTracks >= 5) ? 2 : 1;
-  const trackRows = safeTracks === 0 ? 0 : Math.ceil(safeTracks / trackColumns);
 
-  const padding = ratio === 'square' && safeTracks >= 5 ? 12 : spec.padding;
+  if (!hasMap) {
+    const width = spec.baseMultiplier * spec.unitW;
+    return {
+      ratio,
+      width,
+      height: undefined,
+      padding: spec.padding,
+      hasMap: false,
+      mapWidth: 0,
+      mapHeight: 0,
+      metricColumns: 2,
+      trackColumns,
+    };
+  }
+
+  const trackRows = safeTracks === 0 ? 0 : Math.ceil(safeTracks / trackColumns);
   const trackSectionHeight =
     safeTracks === 0
       ? 0
@@ -105,12 +103,12 @@ export function computeShareCardLayout(
     ratio,
     width,
     height,
-    padding,
-    mapWidth: width - padding * 2,
+    padding: spec.padding,
+    hasMap: true,
+    mapWidth: width - spec.padding * 2,
     mapHeight,
-    metricColumns: spec.metricColumns,
+    metricColumns: 2,
     trackColumns,
-    compactTitle: spec.compactTitle,
   };
 }
 

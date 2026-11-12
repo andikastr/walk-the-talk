@@ -100,19 +100,36 @@ describe('services/location/static-map & share-card-layout', () => {
     ).toBeNull();
   });
 
-  it('keeps exact 1:1, 3:4, and 9:16 ratios even when scaling for large playlists', () => {
+  it('keeps exact 3:4 (Post) and 9:16 (Story) ratios even when scaling for large playlists', () => {
     for (const trackCount of [0, 1, 4, 12, 18]) {
-      const sq = computeShareCardLayout('square', trackCount);
       const po = computeShareCardLayout('portrait', trackCount);
       const st = computeShareCardLayout('story', trackCount);
 
-      expect(sq.width / sq.height).toBeCloseTo(1, 5);
-      expect(po.width / po.height).toBeCloseTo(3 / 4, 5);
-      expect(st.width / st.height).toBeCloseTo(9 / 16, 5);
-      expect(sq.mapWidth).toBeGreaterThan(0);
-      expect(sq.mapHeight).toBeGreaterThan(0);
+      expect(po.height).toBeDefined();
+      expect(st.height).toBeDefined();
+      expect(po.width / (po.height ?? 1)).toBeCloseTo(3 / 4, 5);
+      expect(st.width / (st.height ?? 1)).toBeCloseTo(9 / 16, 5);
+      expect(po.hasMap).toBe(true);
+      expect(st.hasMap).toBe(true);
+      expect(po.mapWidth).toBeGreaterThan(0);
       expect(po.mapHeight).toBeGreaterThan(0);
       expect(st.mapHeight).toBeGreaterThan(0);
+    }
+  });
+
+  it('omits map canvas dimensions and uses auto height for indoor workouts', () => {
+    for (const trackCount of [0, 1, 5]) {
+      const po = computeShareCardLayout('portrait', trackCount, false);
+      const st = computeShareCardLayout('story', trackCount, false);
+
+      expect(po.hasMap).toBe(false);
+      expect(po.mapWidth).toBe(0);
+      expect(po.mapHeight).toBe(0);
+      expect(po.height).toBeUndefined();
+      expect(st.hasMap).toBe(false);
+      expect(st.mapWidth).toBe(0);
+      expect(st.mapHeight).toBe(0);
+      expect(st.height).toBeUndefined();
     }
   });
 });

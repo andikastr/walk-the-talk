@@ -17,7 +17,6 @@ import {
   Layers,
   Sparkles,
   X,
-  Square,
   RectangleVertical,
   Smartphone,
 } from 'lucide-react-native';
@@ -90,9 +89,11 @@ export function ShareWorkoutModal({
     [workout]
   );
 
+  const showMapCanvas = !workout.isIndoor;
+
   const layout = useMemo(
-    () => computeShareCardLayout(aspectRatio, soundtracks.length),
-    [aspectRatio, soundtracks.length]
+    () => computeShareCardLayout(aspectRatio, soundtracks.length, showMapCanvas),
+    [aspectRatio, soundtracks.length, showMapCanvas]
   );
 
   const presets: { key: SharePreset; label: string }[] = [
@@ -102,7 +103,6 @@ export function ShareWorkoutModal({
   ];
 
   const ratioOptions: { key: ShareAspectRatio; label: string }[] = [
-    { key: 'square', label: t.shareModal.ratioSquare },
     { key: 'portrait', label: t.shareModal.ratioPortrait },
     { key: 'story', label: t.shareModal.ratioStory },
   ];
@@ -178,7 +178,7 @@ export function ShareWorkoutModal({
         return;
       }
 
-      if (!tilesSettledRef.current) {
+      if (showMapCanvas && !tilesSettledRef.current) {
         await Promise.race([
           new Promise<void>((resolve) => {
             tileWaitersRef.current.push(resolve);
@@ -331,9 +331,7 @@ export function ShareWorkoutModal({
                         isAppDark && { borderWidth: 1, borderColor: palette.border },
                     ]}
                   >
-                    {item.key === 'square' ? (
-                      <Square size={12} color={iconColor} strokeWidth={2.2} />
-                    ) : item.key === 'portrait' ? (
+                    {item.key === 'portrait' ? (
                       <RectangleVertical size={12} color={iconColor} strokeWidth={2.2} />
                     ) : (
                       <Smartphone size={12} color={iconColor} strokeWidth={2.2} />
@@ -374,9 +372,9 @@ export function ShareWorkoutModal({
                       styles.card,
                       {
                         width: layout.width,
-                        height: layout.height,
                         padding: layout.padding,
                       },
+                      layout.height !== undefined && { height: layout.height },
                       preset === 'paper' && styles.cardPaper,
                       preset === 'dark' && styles.cardDark,
                       preset === 'sticker' && styles.cardSticker,
@@ -408,72 +406,64 @@ export function ShareWorkoutModal({
                         </Text>
                       </View>
 
-                      {layout.compactTitle ? (
-                        <View style={styles.compactTitleRow}>
-                          <Text
-                            numberOfLines={1}
-                            style={[
-                              styles.workoutTitleCompact,
-                              { color: cardTextPrimary },
-                            ]}
-                          >
-                            {workout.title}
-                          </Text>
-                          <Text style={[styles.dateTextInline, { color: cardTextSecondary }]}>
-                            {dateLabel}
-                          </Text>
-                        </View>
-                      ) : (
-                        <>
-                          <Text
-                            numberOfLines={2}
-                            style={[styles.workoutTitle, { color: cardTextPrimary }]}
-                          >
-                            {workout.title}
-                          </Text>
-                          <Text style={[styles.dateText, { color: cardTextSecondary }]}>
-                            {dateLabel}
-                          </Text>
-                        </>
-                      )}
+                      <Text
+                        numberOfLines={2}
+                        style={[styles.workoutTitle, { color: cardTextPrimary }]}
+                      >
+                        {workout.title}
+                      </Text>
+                      <Text
+                        style={[
+                          styles.dateText,
+                          !layout.hasMap && styles.dateTextNoMap,
+                          { color: cardTextSecondary },
+                        ]}
+                      >
+                        {dateLabel}
+                      </Text>
                     </View>
+
+                    {layout.hasMap ? (
+                      <View
+                        collapsable={false}
+                        style={[
+                          styles.routeStage,
+                          {
+                            width: layout.mapWidth,
+                            height: layout.mapHeight,
+                          },
+                          preset === 'paper' && styles.routeStagePaper,
+                          preset === 'dark' && styles.routeStageDark,
+                          preset === 'sticker' && styles.routeStageSticker,
+                        ]}
+                      >
+                        <ShareRouteMap
+                          routePoints={workout.routePoints}
+                          width={layout.mapWidth}
+                          height={layout.mapHeight}
+                          theme={mapTheme}
+                          strokeColor={routeStroke}
+                          strokeWidth={4}
+                          startDotColor={routeStart}
+                          endDotColor={routeEnd}
+                          fallbackColor={cardTextSecondary}
+                          onTilesSettledChange={handleTilesSettledChange}
+                        />
+                      </View>
+                    ) : null}
 
                     <View
-                      collapsable={false}
                       style={[
-                        styles.routeStage,
-                        {
-                          width: layout.mapWidth,
-                          height: layout.mapHeight,
-                        },
-                        preset === 'paper' && styles.routeStagePaper,
-                        preset === 'dark' && styles.routeStageDark,
-                        preset === 'sticker' && styles.routeStageSticker,
+                        styles.cardStatsBlock,
+                        !layout.hasMap && styles.cardStatsBlockNoMap,
                       ]}
                     >
-                      <ShareRouteMap
-                        routePoints={workout.routePoints}
-                        width={layout.mapWidth}
-                        height={layout.mapHeight}
-                        theme={mapTheme}
-                        strokeColor={routeStroke}
-                        strokeWidth={4}
-                        startDotColor={routeStart}
-                        endDotColor={routeEnd}
-                        fallbackColor={cardTextSecondary}
-                        onTilesSettledChange={handleTilesSettledChange}
-                      />
-                    </View>
-
-                    <View style={styles.cardStatsBlock}>
                       <View style={styles.heroDistanceRow}>
                         <Text
                           style={[
-                            layout.ratio === 'square'
-                              ? styles.heroDistanceValCompact
-                              : layout.ratio === 'story'
-                                ? styles.heroDistanceValStory
-                                : styles.heroDistanceVal,
+                            layout.ratio === 'story'
+                              ? styles.heroDistanceValStory
+                              : styles.heroDistanceVal,
                             { color: accentHero },
                           ]}
                         >
@@ -487,28 +477,12 @@ export function ShareWorkoutModal({
                       </View>
 
                       <View
-                        style={[
-                          styles.hairline,
-                          layout.ratio === 'square' && styles.hairlineCompact,
-                          { backgroundColor: hairlineColor },
-                        ]}
+                        style={[styles.hairline, { backgroundColor: hairlineColor }]}
                       />
 
-                      <View
-                        style={[
-                          styles.metricsGrid,
-                          layout.metricColumns === 4 && styles.metricsGridCompact,
-                        ]}
-                      >
+                      <View style={styles.metricsGrid}>
                         {metrics.map((metric) => (
-                          <View
-                            key={metric.label}
-                            style={
-                              layout.metricColumns === 4
-                                ? styles.metricCellQuarter
-                                : styles.metricCellHalf
-                            }
-                          >
+                          <View key={metric.label} style={styles.metricCellHalf}>
                             <Text
                               style={[styles.metricLabel, { color: cardTextSecondary }]}
                               numberOfLines={1}
@@ -516,12 +490,7 @@ export function ShareWorkoutModal({
                               {metric.label}
                             </Text>
                             <Text
-                              style={[
-                                layout.ratio === 'square'
-                                  ? styles.metricValCompact
-                                  : styles.metricVal,
-                                { color: cardTextPrimary },
-                              ]}
+                              style={[styles.metricVal, { color: cardTextPrimary }]}
                               numberOfLines={1}
                             >
                               {metric.value}
@@ -798,23 +767,6 @@ const styles = StyleSheet.create({
     ...TYPOGRAPHY.caption,
     fontSize: 10,
   },
-  compactTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    justifyContent: 'space-between',
-    gap: 8,
-    marginBottom: 6,
-  },
-  workoutTitleCompact: {
-    ...TYPOGRAPHY.headlineSm,
-    fontSize: 16,
-    lineHeight: 20,
-    flex: 1,
-  },
-  dateTextInline: {
-    ...TYPOGRAPHY.caption,
-    fontSize: 10,
-  },
   workoutTitle: {
     ...TYPOGRAPHY.headlineSm,
     fontSize: 19,
@@ -824,6 +776,9 @@ const styles = StyleSheet.create({
     ...TYPOGRAPHY.caption,
     marginTop: 2,
     marginBottom: 8,
+  },
+  dateTextNoMap: {
+    marginBottom: 4,
   },
   routeStage: {
     borderRadius: RADIUS.md,
@@ -845,6 +800,9 @@ const styles = StyleSheet.create({
   cardStatsBlock: {
     marginTop: 8,
   },
+  cardStatsBlockNoMap: {
+    marginTop: 6,
+  },
   heroDistanceRow: {
     flexDirection: 'row',
     alignItems: 'baseline',
@@ -855,12 +813,6 @@ const styles = StyleSheet.create({
     fontSize: 40,
     lineHeight: 42,
     letterSpacing: -1.4,
-  },
-  heroDistanceValCompact: {
-    ...TYPOGRAPHY.displayXl,
-    fontSize: 30,
-    lineHeight: 32,
-    letterSpacing: -1.1,
   },
   heroDistanceValStory: {
     ...TYPOGRAPHY.displayXl,
@@ -876,23 +828,13 @@ const styles = StyleSheet.create({
     height: 1,
     marginVertical: 8,
   },
-  hairlineCompact: {
-    marginVertical: 6,
-  },
   metricsGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     rowGap: 8,
   },
-  metricsGridCompact: {
-    rowGap: 0,
-  },
   metricCellHalf: {
     width: '50%',
-  },
-  metricCellQuarter: {
-    width: '25%',
-    paddingRight: 4,
   },
   metricLabel: {
     ...TYPOGRAPHY.caption,
@@ -903,11 +845,6 @@ const styles = StyleSheet.create({
     ...TYPOGRAPHY.numeralSm,
     fontSize: 15,
     lineHeight: 19,
-  },
-  metricValCompact: {
-    ...TYPOGRAPHY.numeralSm,
-    fontSize: 12.5,
-    lineHeight: 16,
   },
   metricUnit: {
     ...TYPOGRAPHY.caption,

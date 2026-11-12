@@ -229,9 +229,8 @@ const idDict = {
     title: 'Bagikan Aktivitas',
     closeA11y: 'Tutup jendela bagikan',
     formatLabel: 'UKURAN KARTU',
-    ratioSquare: '1:1 Kotak',
-    ratioPortrait: '3:4 Post',
-    ratioStory: '9:16 Story',
+    ratioPortrait: 'Post',
+    ratioStory: 'Story',
     presets: {
       paper: 'Paper',
       dark: 'Dark Ink',
@@ -611,9 +610,8 @@ const enDict: typeof idDict = {
     title: 'Share Activity',
     closeA11y: 'Close share sheet',
     formatLabel: 'CARD FORMAT',
-    ratioSquare: '1:1 Square',
-    ratioPortrait: '3:4 Post',
-    ratioStory: '9:16 Story',
+    ratioPortrait: 'Post',
+    ratioStory: 'Story',
     presets: {
       paper: 'Paper',
       dark: 'Dark Ink',

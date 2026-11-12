@@ -118,43 +118,30 @@ export default function WorkoutDetailScreen() {
   return (
     <ScrollView
       style={[styles.container, { backgroundColor: palette.surface }]}
-      contentContainerStyle={styles.content}
+      contentContainerStyle={[
+        styles.content,
+        workout.isIndoor && styles.contentIndoor,
+      ]}
       showsVerticalScrollIndicator={false}
     >
-      {/* Rounded Map Route Card (or Indoor Summary Banner when GPS-free) */}
-      <View style={styles.mapWrapper}>
-        <View
-          style={[
-            styles.mapCard,
-            { backgroundColor: palette.surfaceAlt },
-            darkSurfaceBorder,
-          ]}
-        >
-          {workout.isIndoor && workout.routePoints.length === 0 ? (
-            <View style={styles.indoorBanner}>
-              <View
-                style={[
-                  styles.indoorIconBadge,
-                  { backgroundColor: palette.surfaceRaised },
-                  darkSurfaceBorder,
-                ]}
-              >
-                <Footprints size={28} strokeWidth={2} color={palette.accent} />
-              </View>
-              <KickerText>{t.record.indoorCardKicker}</KickerText>
-              <Text style={[styles.indoorBannerTitle, { color: palette.onSurface }]}>
-                {t.record.indoorCardHeading}
-              </Text>
-            </View>
-          ) : (
+      {/* Rounded Map Route Card (omitted for GPS-free indoor workouts) */}
+      {!workout.isIndoor && (
+        <View style={styles.mapWrapper}>
+          <View
+            style={[
+              styles.mapCard,
+              { backgroundColor: palette.surfaceAlt },
+              darkSurfaceBorder,
+            ]}
+          >
             <WorkoutMap
               currentLocation={centerCoord}
               routeCoordinates={workout.routePoints}
               isTracking={false}
             />
-          )}
+          </View>
         </View>
-      </View>
+      )}
 
       {/* Editorial Title & Type Chip */}
       <View style={styles.headerBox}>
@@ -383,6 +370,9 @@ const styles = StyleSheet.create({
     paddingTop: SPACING.sm,
     paddingBottom: 48,
   },
+  contentIndoor: {
+    paddingTop: SPACING.md,
+  },
   loadingContainer: {
     flex: 1,
     alignItems: 'center',
@@ -420,25 +410,6 @@ const styles = StyleSheet.create({
     borderRadius: RADIUS.lg,
     borderCurve: 'continuous',
     overflow: 'hidden',
-  },
-  indoorBanner: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: SPACING.xl,
-    gap: 8,
-  },
-  indoorIconBadge: {
-    width: 58,
-    height: 58,
-    borderRadius: RADIUS.full,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 4,
-  },
-  indoorBannerTitle: {
-    ...TYPOGRAPHY.headlineSm,
-    textAlign: 'center',
   },
   headerBox: {
     paddingHorizontal: SPACING.gutter,
