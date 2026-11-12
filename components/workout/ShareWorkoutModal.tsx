@@ -19,6 +19,7 @@ import {
   X,
   RectangleVertical,
   Smartphone,
+  Activity,
 } from 'lucide-react-native';
 import { WorkoutRecord } from '@/types/workout';
 import { formatDuration, formatPace, formatSteps } from '@/services/location/metrics';
@@ -53,6 +54,13 @@ interface InlineFeedbackState {
   title: string;
   message: string;
 }
+
+const TRACK_CELL_WIDTH_BY_COLS: Record<1 | 2 | 3 | 4, `${number}%`> = {
+  1: '100%',
+  2: '50%',
+  3: '33.3333%',
+  4: '25%',
+};
 
 export function ShareWorkoutModal({
   visible,
@@ -95,6 +103,16 @@ export function ShareWorkoutModal({
     () => computeShareCardLayout(aspectRatio, soundtracks.length, showMapCanvas),
     [aspectRatio, soundtracks.length, showMapCanvas]
   );
+
+  const visibleSoundtracks = useMemo(
+    () => soundtracks.slice(0, layout.maxVisibleTracks),
+    [soundtracks, layout.maxVisibleTracks]
+  );
+
+  const cadenceSpm = useMemo(() => {
+    if (workout.durationSeconds <= 0) return 0;
+    return Math.round((workout.steps ?? 0) / (workout.durationSeconds / 60));
+  }, [workout.steps, workout.durationSeconds]);
 
   const presets: { key: SharePreset; label: string }[] = [
     { key: 'paper', label: t.shareModal.presets.paper },
@@ -184,7 +202,7 @@ export function ShareWorkoutModal({
             tileWaitersRef.current.push(resolve);
           }),
           new Promise<void>((resolve) => {
-            setTimeout(resolve, 900);
+            setTimeout(resolve, 3500);
           }),
         ]);
       }
@@ -372,9 +390,9 @@ export function ShareWorkoutModal({
                       styles.card,
                       {
                         width: layout.width,
+                        height: layout.height,
                         padding: layout.padding,
                       },
-                      layout.height !== undefined && { height: layout.height },
                       preset === 'paper' && styles.cardPaper,
                       preset === 'dark' && styles.cardDark,
                       preset === 'sticker' && styles.cardSticker,
@@ -415,7 +433,6 @@ export function ShareWorkoutModal({
                       <Text
                         style={[
                           styles.dateText,
-                          !layout.hasMap && styles.dateTextNoMap,
                           { color: cardTextSecondary },
                         ]}
                       >
@@ -429,8 +446,8 @@ export function ShareWorkoutModal({
                         style={[
                           styles.routeStage,
                           {
-                            width: layout.mapWidth,
-                            height: layout.mapHeight,
+                            width: layout.stageWidth,
+                            height: layout.stageHeight,
                           },
                           preset === 'paper' && styles.routeStagePaper,
                           preset === 'dark' && styles.routeStageDark,
@@ -439,25 +456,111 @@ export function ShareWorkoutModal({
                       >
                         <ShareRouteMap
                           routePoints={workout.routePoints}
-                          width={layout.mapWidth}
-                          height={layout.mapHeight}
+                          width={layout.stageWidth}
+                          height={layout.stageHeight}
                           theme={mapTheme}
                           strokeColor={routeStroke}
                           strokeWidth={4}
                           startDotColor={routeStart}
                           endDotColor={routeEnd}
                           fallbackColor={cardTextSecondary}
+                          gpsStatusLabel={t.shareModal.gpsNotLocked}
                           onTilesSettledChange={handleTilesSettledChange}
                         />
                       </View>
-                    ) : null}
+                    ) : (
+                      <View
+                        collapsable={false}
+                        style={[
+                          styles.indoorPanel,
+                          {
+                            width: layout.stageWidth,
+                            height: layout.stageHeight,
+                          },
+                          preset === 'paper' && styles.indoorPanelPaper,
+                          preset === 'dark' && styles.indoorPanelDark,
+                          preset === 'sticker' && styles.indoorPanelSticker,
+                        ]}
+                      >
+                        <View style={styles.indoorPanelHeader}>
+                          <Activity size={13} color={accentHero} strokeWidth={2.2} />
+                          <Text
+                            style={[
+                              styles.indoorPanelTitle,
+                              { color: cardTextSecondary },
+                            ]}
+                          >
+                            {t.shareModal.indoorFocusTitle}
+                          </Text>
+                        </View>
 
-                    <View
-                      style={[
-                        styles.cardStatsBlock,
-                        !layout.hasMap && styles.cardStatsBlockNoMap,
-                      ]}
-                    >
+                        <View style={styles.indoorFocusGrid}>
+                          <View style={styles.indoorFocusCell}>
+                            <Text
+                              style={[
+                                styles.indoorFocusLabel,
+                                { color: cardTextSecondary },
+                              ]}
+                              numberOfLines={1}
+                            >
+                              {t.shareModal.cadenceLabel}
+                            </Text>
+                            <View style={styles.indoorFocusValueRow}>
+                              <Text
+                                style={[
+                                  layout.ratio === 'story'
+                                    ? styles.indoorFocusValueStory
+                                    : styles.indoorFocusValue,
+                                  { color: accentHero },
+                                ]}
+                              >
+                                {cadenceSpm}
+                              </Text>
+                              <Text
+                                style={[
+                                  styles.indoorFocusUnit,
+                                  { color: cardTextSecondary },
+                                ]}
+                              >
+                                {t.shareModal.spmUnit}
+                              </Text>
+                            </View>
+                          </View>
+
+                          <View
+                            style={[
+                              styles.indoorDivider,
+                              { backgroundColor: hairlineColor },
+                            ]}
+                          />
+
+                          <View style={styles.indoorFocusCell}>
+                            <Text
+                              style={[
+                                styles.indoorFocusLabel,
+                                { color: cardTextSecondary },
+                              ]}
+                              numberOfLines={1}
+                            >
+                              {t.shareModal.activeDurationLabel}
+                            </Text>
+                            <Text
+                              style={[
+                                layout.ratio === 'story'
+                                  ? styles.indoorFocusValueStory
+                                  : styles.indoorFocusValue,
+                                { color: cardTextPrimary },
+                              ]}
+                              numberOfLines={1}
+                            >
+                              {formatDuration(workout.durationSeconds)}
+                            </Text>
+                          </View>
+                        </View>
+                      </View>
+                    )}
+
+                    <View style={styles.cardStatsBlock}>
                       <View style={styles.heroDistanceRow}>
                         <Text
                           style={[
@@ -511,7 +614,7 @@ export function ShareWorkoutModal({
                       </View>
                     </View>
 
-                    {soundtracks.length > 0 ? (
+                    {visibleSoundtracks.length > 0 ? (
                       <View
                         style={[
                           styles.musicFooter,
@@ -519,7 +622,7 @@ export function ShareWorkoutModal({
                         ]}
                       >
                         <View style={styles.musicHeaderRow}>
-                          <Music size={11} color={accentHero} strokeWidth={2.2} />
+                          <Music size={10} color={accentHero} strokeWidth={2.2} />
                           <Text
                             style={[
                               styles.musicHeaderLabel,
@@ -532,21 +635,22 @@ export function ShareWorkoutModal({
                         <View
                           style={[
                             styles.musicTrackGrid,
-                            layout.trackColumns === 2 && styles.musicTrackGridTwoCol,
+                            layout.trackColumns > 1 && styles.musicTrackGridMultiCol,
                           ]}
                         >
-                          {soundtracks.map((track, idx) => (
+                          {visibleSoundtracks.map((track, idx) => (
                             <View
                               key={`${track.trackId ?? track.trackName}-${idx}`}
-                              style={
-                                layout.trackColumns === 2
-                                  ? styles.musicTrackCellHalf
-                                  : styles.musicTrackCellFull
-                              }
+                              style={[
+                                styles.musicTrackCell,
+                                { width: TRACK_CELL_WIDTH_BY_COLS[layout.trackColumns] },
+                                layout.trackColumns > 1 && styles.musicTrackCellMulti,
+                              ]}
                             >
                               <Text
                                 style={[
                                   styles.musicTrackIndex,
+                                  layout.trackColumns >= 3 && styles.musicTrackIndexCompact,
                                   { color: accentHero },
                                 ]}
                               >
@@ -554,13 +658,15 @@ export function ShareWorkoutModal({
                               </Text>
                               <Text
                                 numberOfLines={1}
+                                ellipsizeMode="tail"
                                 style={[
                                   styles.musicFooterText,
+                                  layout.trackColumns >= 3 && styles.musicFooterTextCompact,
                                   { color: cardTextPrimary },
                                 ]}
                               >
                                 {track.trackName}
-                                {track.artist ? (
+                                {layout.showTrackArtist && track.artist ? (
                                   <Text style={{ color: cardTextSecondary }}>
                                     {' '}
                                     · {track.artist}
@@ -570,6 +676,17 @@ export function ShareWorkoutModal({
                             </View>
                           ))}
                         </View>
+                        {layout.overflowTracks > 0 ? (
+                          <Text
+                            numberOfLines={1}
+                            style={[
+                              styles.musicOverflowText,
+                              { color: cardTextSecondary },
+                            ]}
+                          >
+                            {t.shareModal.soundtracksOverflow(layout.overflowTracks)}
+                          </Text>
+                        ) : null}
                       </View>
                     ) : null}
                   </View>
@@ -769,16 +886,13 @@ const styles = StyleSheet.create({
   },
   workoutTitle: {
     ...TYPOGRAPHY.headlineSm,
-    fontSize: 19,
-    lineHeight: 23,
+    fontSize: 17,
+    lineHeight: 20,
   },
   dateText: {
     ...TYPOGRAPHY.caption,
     marginTop: 2,
-    marginBottom: 8,
-  },
-  dateTextNoMap: {
-    marginBottom: 4,
+    marginBottom: 6,
   },
   routeStage: {
     borderRadius: RADIUS.md,
@@ -797,10 +911,82 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(244, 242, 236, 0.28)',
   },
-  cardStatsBlock: {
-    marginTop: 8,
+  indoorPanel: {
+    borderRadius: RADIUS.md,
+    borderCurve: 'continuous',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    justifyContent: 'space-between',
   },
-  cardStatsBlockNoMap: {
+  indoorPanelPaper: {
+    backgroundColor: LIGHT_PALETTE.surfaceAlt,
+    borderWidth: 1,
+    borderColor: LIGHT_PALETTE.border,
+  },
+  indoorPanelDark: {
+    backgroundColor: 'rgba(244, 242, 236, 0.06)',
+    borderWidth: 1,
+    borderColor: 'rgba(244, 242, 236, 0.14)',
+  },
+  indoorPanelSticker: {
+    backgroundColor: 'rgba(14, 15, 12, 0.42)',
+    borderWidth: 1,
+    borderColor: 'rgba(244, 242, 236, 0.28)',
+  },
+  indoorPanelHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  indoorPanelTitle: {
+    ...TYPOGRAPHY.caption,
+    fontSize: 9.5,
+    letterSpacing: 0.9,
+  },
+  indoorFocusGrid: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  indoorFocusCell: {
+    flex: 1,
+    justifyContent: 'center',
+  },
+  indoorDivider: {
+    width: 1,
+    height: '56%',
+  },
+  indoorFocusLabel: {
+    ...TYPOGRAPHY.caption,
+    fontSize: 9.5,
+    letterSpacing: 0.6,
+    marginBottom: 4,
+  },
+  indoorFocusValueRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 4,
+  },
+  indoorFocusValue: {
+    ...TYPOGRAPHY.displayXl,
+    fontSize: 28,
+    lineHeight: 32,
+    letterSpacing: -0.9,
+  },
+  indoorFocusValueStory: {
+    ...TYPOGRAPHY.displayXl,
+    fontSize: 32,
+    lineHeight: 36,
+    letterSpacing: -1.1,
+  },
+  indoorFocusUnit: {
+    ...TYPOGRAPHY.caption,
+    fontSize: 11,
+    textTransform: 'lowercase',
+  },
+  cardStatsBlock: {
     marginTop: 6,
   },
   heroDistanceRow: {
@@ -810,41 +996,41 @@ const styles = StyleSheet.create({
   },
   heroDistanceVal: {
     ...TYPOGRAPHY.displayXl,
-    fontSize: 40,
-    lineHeight: 42,
-    letterSpacing: -1.4,
+    fontSize: 36,
+    lineHeight: 38,
+    letterSpacing: -1.3,
   },
   heroDistanceValStory: {
     ...TYPOGRAPHY.displayXl,
-    fontSize: 46,
-    lineHeight: 48,
-    letterSpacing: -1.7,
+    fontSize: 42,
+    lineHeight: 44,
+    letterSpacing: -1.5,
   },
   heroDistanceUnit: {
     ...TYPOGRAPHY.headlineSm,
-    fontSize: 14,
+    fontSize: 13,
   },
   hairline: {
     height: 1,
-    marginVertical: 8,
+    marginVertical: 6,
   },
   metricsGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    rowGap: 8,
+    rowGap: 6,
   },
   metricCellHalf: {
     width: '50%',
   },
   metricLabel: {
     ...TYPOGRAPHY.caption,
-    fontSize: 9.5,
+    fontSize: 9,
     marginBottom: 1,
   },
   metricVal: {
     ...TYPOGRAPHY.numeralSm,
-    fontSize: 15,
-    lineHeight: 19,
+    fontSize: 14,
+    lineHeight: 18,
   },
   metricUnit: {
     ...TYPOGRAPHY.caption,
@@ -854,9 +1040,9 @@ const styles = StyleSheet.create({
   },
   musicFooter: {
     borderTopWidth: 1,
-    paddingTop: 7,
-    marginTop: 8,
-    gap: 4,
+    paddingTop: 6,
+    marginTop: 6,
+    gap: 3,
   },
   musicHeaderRow: {
     flexDirection: 'row',
@@ -865,40 +1051,54 @@ const styles = StyleSheet.create({
   },
   musicHeaderLabel: {
     ...TYPOGRAPHY.caption,
-    fontSize: 9.5,
+    fontSize: 9,
     letterSpacing: 0.7,
+    lineHeight: 13,
   },
   musicTrackGrid: {
-    gap: 3,
+    rowGap: 2,
   },
-  musicTrackGridTwoCol: {
+  musicTrackGridMultiCol: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    rowGap: 4,
+    rowGap: 2,
   },
-  musicTrackCellFull: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-  },
-  musicTrackCellHalf: {
-    width: '50%',
+  musicTrackCell: {
+    height: 13,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    paddingRight: 6,
+  },
+  musicTrackCellMulti: {
+    paddingRight: 4,
   },
   musicTrackIndex: {
     ...TYPOGRAPHY.numeralSm,
-    fontSize: 10,
+    fontSize: 9.5,
+    lineHeight: 13,
+  },
+  musicTrackIndexCompact: {
+    fontSize: 8.5,
+    lineHeight: 13,
   },
   musicFooterText: {
     ...TYPOGRAPHY.caption,
-    fontSize: 10.5,
-    lineHeight: 14,
+    fontSize: 10,
+    lineHeight: 13,
     textTransform: 'none',
     letterSpacing: 0,
     flex: 1,
+  },
+  musicFooterTextCompact: {
+    fontSize: 9,
+    lineHeight: 13,
+  },
+  musicOverflowText: {
+    ...TYPOGRAPHY.caption,
+    fontSize: 9,
+    lineHeight: 13,
+    textTransform: 'none',
+    letterSpacing: 0,
   },
   stickerHint: {
     ...TYPOGRAPHY.bodySm,

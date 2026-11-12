@@ -1,10 +1,11 @@
-import React, { useCallback, useEffect, useMemo, useRef } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Image, StyleSheet, Text, View } from 'react-native';
 import Svg, { Circle, Line, Polyline } from 'react-native-svg';
 import { GPSCoordinate } from '@/types/workout';
 import { LIGHT_PALETTE, PALETTE } from '@/constants/Colors';
 import { MAP_CONFIG } from '@/constants/Config';
 import {
+  buildOsmTileUrl,
   computeStaticMapPlan,
   StaticMapTheme,
 } from '@/services/location/static-map';
@@ -20,10 +21,13 @@ interface ShareRouteMapProps {
   startDotColor?: string;
   endDotColor?: string;
   fallbackColor?: string;
+  gpsStatusLabel?: string;
   onTilesSettledChange?: (settled: boolean) => void;
 }
 
 const GRID_STEP = 28;
+const OSM_TILE_HEADERS = { 'User-Agent': 'WalkTheTalk-RunningApp/1.0 (Expo)' };
+const EMPTY_FALLBACK_KEYS: Record<string, true> = {};
 
 export function ShareRouteMap({
   routePoints,
@@ -35,6 +39,7 @@ export function ShareRouteMap({
   startDotColor = PALETTE.surfaceInverse,
   endDotColor = PALETTE.primary,
   fallbackColor = PALETTE.onSurfaceVariant,
+  gpsStatusLabel,
   onTilesSettledChange,
 }: ShareRouteMapProps) {
   const plan = useMemo(
@@ -54,6 +59,15 @@ export function ShareRouteMap({
     () => (plan ? plan.tiles.map((t) => t.key).join('|') : ''),
     [plan]
   );
+  const [osmFallbackState, setOsmFallbackState] = useState<{
+    signature: string;
+    keys: Record<string, true>;
+  }>({ signature: '', keys: EMPTY_FALLBACK_KEYS });
+  const osmFallbackKeys =
+    osmFallbackState.signature === tileKeysSignature
+      ? osmFallbackState.keys
+      : EMPTY_FALLBACK_KEYS;
+
   const settledTrackerRef = useRef<{ signature: string; keys: Set<string> }>({
     signature: '',
     keys: new Set(),
@@ -88,13 +102,6 @@ export function ShareRouteMap({
   const routeCasingStroke = isDark
     ? 'rgba(14, 15, 12, 0.78)'
     : 'rgba(14, 15, 12, 0.42)';
-  const tileRequestHeaders = useMemo(
-    () =>
-      plan?.usesCarto
-        ? undefined
-        : { 'User-Agent': 'WalkTheTalk-RunningApp/1.0 (Expo)' },
-    [plan?.usesCarto]
-  );
 
   const gridLines = useMemo(() => {
     const vertical: number[] = [];
@@ -108,7 +115,7 @@ export function ShareRouteMap({
     return { vertical, horizontal };
   }, [width, height]);
 
-  if (!plan || plan.segments.length === 0) {
+  if (!plan || (!plan.isSinglePoint && plan.segments.length === 0)) {
     return (
       <View
         style={[
@@ -130,9 +137,31 @@ export function ShareRouteMap({
           endDotColor={endDotColor}
           fallbackColor={fallbackColor}
         />
+        {gpsStatusLabel ? (
+          <View
+            pointerEvents="none"
+            style={[
+              styles.gpsFallbackPill,
+              {
+                backgroundColor: isDark
+                  ? 'rgba(14, 15, 12, 0.72)'
+                  : 'rgba(244, 242, 236, 0.9)',
+              },
+            ]}
+          >
+            <Text style={[styles.gpsFallbackText, { color: fallbackColor }]}>
+              {gpsStatusLabel}
+            </Text>
+          </View>
+        ) : null}
       </View>
     );
   }
+
+  const allFallbackToOsm =
+    plan.usesCarto &&
+    plan.tiles.length > 0 &&
+    Object.keys(osmFallbackKeys).length >= plan.tiles.length;
 
   return (
     <View
@@ -177,28 +206,52 @@ export function ShareRouteMap({
         ))}
       </Svg>
 
-      {/* Slippy XYZ Web Mercator Basemap Tiles */}
-      {plan.tiles.map((tile) => (
-        <Image
-          key={tile.key}
-          source={
-            tileRequestHeaders
-              ? { uri: tile.url, headers: tileRequestHeaders }
-              : { uri: tile.url }
-          }
-          fadeDuration={0}
-          resizeMode="cover"
-          onLoad={() => markTileSettled(tile.key, plan.tiles.length)}
-          onError={() => markTileSettled(tile.key, plan.tiles.length)}
-          style={{
-            position: 'absolute',
-            left: tile.left,
-            top: tile.top,
-            width: tile.size,
-            height: tile.size,
-          }}
-        />
-      ))}
+      {/* Slippy XYZ Web Mercator Basemap Tiles (with per-tile Carto -> OSM fallback) */}
+      {plan.tiles.map((tile) => {
+        const isOsmRetry = Boolean(plan.usesCarto && osmFallbackKeys[tile.key]);
+        const tileUrl = isOsmRetry
+          ? buildOsmTileUrl(tile.z, tile.x, tile.y)
+          : tile.url;
+        const needsOsmHeaders = !plan.usesCarto || isOsmRetry;
+
+        return (
+          <Image
+            key={isOsmRetry ? `${tile.key}-osm` : tile.key}
+            source={
+              needsOsmHeaders
+                ? { uri: tileUrl, headers: OSM_TILE_HEADERS }
+                : { uri: tileUrl }
+            }
+            fadeDuration={0}
+            resizeMode="cover"
+            onLoad={() => markTileSettled(tile.key, plan.tiles.length)}
+            onError={() => {
+              if (plan.usesCarto && !isOsmRetry) {
+                setOsmFallbackState((prev) => {
+                  const baseKeys =
+                    prev.signature === tileKeysSignature ? prev.keys : {};
+                  if (baseKeys[tile.key]) {
+                    return prev;
+                  }
+                  return {
+                    signature: tileKeysSignature,
+                    keys: { ...baseKeys, [tile.key]: true },
+                  };
+                });
+                return;
+              }
+              markTileSettled(tile.key, plan.tiles.length);
+            }}
+            style={{
+              position: 'absolute',
+              left: tile.left,
+              top: tile.top,
+              width: tile.size,
+              height: tile.size,
+            }}
+          />
+        );
+      })}
 
       {/* Contrast glaze so route trail always pops clearly */}
       <View
@@ -207,17 +260,17 @@ export function ShareRouteMap({
           StyleSheet.absoluteFill,
           {
             backgroundColor: isDark
-              ? plan.usesCarto
+              ? plan.usesCarto && !allFallbackToOsm
                 ? 'rgba(14, 15, 12, 0.12)'
                 : 'rgba(14, 15, 12, 0.36)'
-              : plan.usesCarto
+              : plan.usesCarto && !allFallbackToOsm
                 ? 'rgba(244, 242, 236, 0.06)'
                 : 'rgba(244, 242, 236, 0.14)',
           },
         ]}
       />
 
-      {/* Aligned GPS Route Polyline Overlay */}
+      {/* Aligned GPS Route Polyline Overlay (or single-point start pin) */}
       <Svg width={width} height={height} style={StyleSheet.absoluteFill}>
         {plan.segments.map((segment, index) => {
           const pointsAttr = segment
@@ -245,37 +298,63 @@ export function ShareRouteMap({
           );
         })}
 
-        {plan.startPoint && (
+        {plan.isSinglePoint && plan.startPoint ? (
           <>
             <Circle
               cx={plan.startPoint.x}
               cy={plan.startPoint.y}
-              r={6.5}
+              r={18}
+              fill={endDotColor}
+              fillOpacity={0.22}
+            />
+            <Circle
+              cx={plan.startPoint.x}
+              cy={plan.startPoint.y}
+              r={8.5}
               fill={LIGHT_PALETTE.surface}
             />
             <Circle
               cx={plan.startPoint.x}
               cy={plan.startPoint.y}
-              r={4.2}
-              fill={startDotColor}
-            />
-          </>
-        )}
-
-        {plan.endPoint && (
-          <>
-            <Circle
-              cx={plan.endPoint.x}
-              cy={plan.endPoint.y}
-              r={7}
-              fill={LIGHT_PALETTE.surface}
-            />
-            <Circle
-              cx={plan.endPoint.x}
-              cy={plan.endPoint.y}
-              r={4.8}
+              r={5.5}
               fill={endDotColor}
             />
+          </>
+        ) : (
+          <>
+            {plan.startPoint && (
+              <>
+                <Circle
+                  cx={plan.startPoint.x}
+                  cy={plan.startPoint.y}
+                  r={6.5}
+                  fill={LIGHT_PALETTE.surface}
+                />
+                <Circle
+                  cx={plan.startPoint.x}
+                  cy={plan.startPoint.y}
+                  r={4.2}
+                  fill={startDotColor}
+                />
+              </>
+            )}
+
+            {plan.endPoint && (
+              <>
+                <Circle
+                  cx={plan.endPoint.x}
+                  cy={plan.endPoint.y}
+                  r={7}
+                  fill={LIGHT_PALETTE.surface}
+                />
+                <Circle
+                  cx={plan.endPoint.x}
+                  cy={plan.endPoint.y}
+                  r={4.8}
+                  fill={endDotColor}
+                />
+              </>
+            )}
           </>
         )}
       </Svg>
@@ -298,7 +377,7 @@ export function ShareRouteMap({
             { color: isDark ? LIGHT_PALETTE.onInverse : LIGHT_PALETTE.onSurface },
           ]}
         >
-          {plan.attribution}
+          {allFallbackToOsm ? '© OpenStreetMap' : plan.attribution}
         </Text>
       </View>
     </View>
@@ -309,6 +388,19 @@ const styles = StyleSheet.create({
   container: {
     overflow: 'hidden',
     position: 'relative',
+  },
+  gpsFallbackPill: {
+    position: 'absolute',
+    bottom: 10,
+    alignSelf: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+  },
+  gpsFallbackText: {
+    fontSize: 10,
+    fontWeight: '600',
+    letterSpacing: 0.2,
   },
   attributionBadge: {
     position: 'absolute',

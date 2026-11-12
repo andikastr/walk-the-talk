@@ -4,13 +4,18 @@ export type ShareAspectRatio = 'portrait' | 'story';
 export interface ShareCardLayout {
   ratio: ShareAspectRatio;
   width: number;
-  height: number | undefined;
+  height: number;
   padding: number;
   hasMap: boolean;
+  stageWidth: number;
+  stageHeight: number;
   mapWidth: number;
   mapHeight: number;
   metricColumns: 2;
-  trackColumns: 1 | 2;
+  trackColumns: 1 | 2 | 3 | 4;
+  maxVisibleTracks: number;
+  overflowTracks: number;
+  showTrackArtist: boolean;
 }
 
 interface RatioSpec {
@@ -18,36 +23,98 @@ interface RatioSpec {
   unitH: number;
   baseMultiplier: number;
   padding: number;
-  minMapHeight: number;
-  maxBaseMapHeight: number;
-  /** Header + hero distance + metric strip vertical footprint + safety buffer */
+  minStageHeight: number;
+  maxTracksFourCol: number;
+  /** Outer padding + header + hero distance + metric strip vertical footprint + safety buffer */
   baseChromeHeight: number;
 }
 
 const RATIO_SPECS: Record<ShareAspectRatio, RatioSpec> = {
   portrait: {
-    unitW: 3,
-    unitH: 4,
-    baseMultiplier: 104,
-    padding: 16,
-    minMapHeight: 120,
-    maxBaseMapHeight: 176,
-    baseChromeHeight: 236,
+    unitW: 4,
+    unitH: 5,
+    baseMultiplier: 96, // 384 x 480 (exact 4:5)
+    padding: 14,
+    minStageHeight: 116,
+    maxTracksFourCol: 24, // 4 cols x 6 rows
+    baseChromeHeight: 228,
   },
   story: {
     unitW: 9,
     unitH: 16,
-    baseMultiplier: 33,
-    padding: 16,
-    minMapHeight: 148,
-    maxBaseMapHeight: 268,
-    baseChromeHeight: 248,
+    baseMultiplier: 36, // 324 x 576 (exact 9:16)
+    padding: 14,
+    minStageHeight: 156,
+    maxTracksFourCol: 32, // 4 cols x 8 rows
+    baseChromeHeight: 234,
   },
 };
 
+interface SoundtrackGridPlan {
+  trackColumns: 1 | 2 | 3 | 4;
+  maxVisibleTracks: number;
+  overflowTracks: number;
+  showTrackArtist: boolean;
+  trackSectionHeight: number;
+}
+
+function computeSoundtrackGridPlan(
+  safeTracks: number,
+  spec: RatioSpec
+): SoundtrackGridPlan {
+  if (safeTracks <= 0) {
+    return {
+      trackColumns: 1,
+      maxVisibleTracks: 0,
+      overflowTracks: 0,
+      showTrackArtist: true,
+      trackSectionHeight: 0,
+    };
+  }
+
+  let trackColumns: 1 | 2 | 3 | 4;
+  let maxVisibleTracks: number;
+  let showTrackArtist: boolean;
+
+  if (safeTracks <= 3) {
+    trackColumns = 1;
+    maxVisibleTracks = 3;
+    showTrackArtist = true;
+  } else if (safeTracks <= 8) {
+    trackColumns = 2;
+    maxVisibleTracks = 8;
+    showTrackArtist = true;
+  } else if (safeTracks <= 15) {
+    trackColumns = 3;
+    maxVisibleTracks = 15;
+    showTrackArtist = false;
+  } else {
+    trackColumns = 4;
+    maxVisibleTracks = spec.maxTracksFourCol;
+    showTrackArtist = false;
+  }
+
+  const displayedCount = Math.min(safeTracks, maxVisibleTracks);
+  const overflowTracks = Math.max(0, safeTracks - displayedCount);
+  const trackRows = Math.ceil(displayedCount / trackColumns);
+
+  // marginTop(6) + paddingTop(6) + header(13) + gridGap(3) + rows*(13) + rowGaps*(2) + optional overflow chip(15)
+  const overflowHeight = overflowTracks > 0 ? 15 : 0;
+  const trackSectionHeight =
+    28 + trackRows * 13 + Math.max(0, trackRows - 1) * 2 + overflowHeight;
+
+  return {
+    trackColumns,
+    maxVisibleTracks,
+    overflowTracks,
+    showTrackArtist,
+    trackSectionHeight,
+  };
+}
+
 /**
- * Computes card dimensions preserving 3:4 (Post) or 9:16 (Story) ratio when a map canvas is shown,
- * or an auto-height compact layout when omitting the map for indoor workouts.
+ * Computes strictly fixed 4:5 (Post) or 9:16 (Story) card dimensions across both
+ * Outdoor (map) and Indoor (focus telemetry panel) sessions and 0..N soundtracks.
  */
 export function computeShareCardLayout(
   ratio: ShareAspectRatio,
@@ -55,60 +122,31 @@ export function computeShareCardLayout(
   hasMap: boolean = true
 ): ShareCardLayout {
   const spec = RATIO_SPECS[ratio];
+  const width = spec.baseMultiplier * spec.unitW;
+  const height = spec.baseMultiplier * spec.unitH;
   const safeTracks = Math.max(0, Math.floor(trackCount));
-  const trackColumns: 1 | 2 =
-    safeTracks >= 2 && (ratio !== 'story' || safeTracks >= 5) ? 2 : 1;
+  const soundtrackPlan = computeSoundtrackGridPlan(safeTracks, spec);
 
-  if (!hasMap) {
-    const width = spec.baseMultiplier * spec.unitW;
-    return {
-      ratio,
-      width,
-      height: undefined,
-      padding: spec.padding,
-      hasMap: false,
-      mapWidth: 0,
-      mapHeight: 0,
-      metricColumns: 2,
-      trackColumns,
-    };
-  }
-
-  const trackRows = safeTracks === 0 ? 0 : Math.ceil(safeTracks / trackColumns);
-  const trackSectionHeight =
-    safeTracks === 0
-      ? 0
-      : 12 + 16 + trackRows * 24 + Math.max(0, trackRows - 1) * 4;
-
-  const requiredMinHeight =
-    spec.baseChromeHeight + spec.minMapHeight + trackSectionHeight;
-
-  let multiplier = spec.baseMultiplier;
-  while (multiplier * spec.unitH < requiredMinHeight) {
-    multiplier += 1;
-  }
-
-  const width = multiplier * spec.unitW;
-  const height = multiplier * spec.unitH;
-  const availableForMap = height - spec.baseChromeHeight - trackSectionHeight;
-  const mapHeight = Math.max(
-    spec.minMapHeight,
-    Math.min(
-      Math.max(spec.maxBaseMapHeight, Math.round(height * 0.44)),
-      availableForMap
-    )
-  );
+  const stageWidth = width - spec.padding * 2;
+  const availableStageHeight =
+    height - spec.baseChromeHeight - soundtrackPlan.trackSectionHeight;
+  const stageHeight = Math.max(spec.minStageHeight, availableStageHeight);
 
   return {
     ratio,
     width,
     height,
     padding: spec.padding,
-    hasMap: true,
-    mapWidth: width - spec.padding * 2,
-    mapHeight,
+    hasMap,
+    stageWidth,
+    stageHeight,
+    mapWidth: hasMap ? stageWidth : 0,
+    mapHeight: hasMap ? stageHeight : 0,
     metricColumns: 2,
-    trackColumns,
+    trackColumns: soundtrackPlan.trackColumns,
+    maxVisibleTracks: soundtrackPlan.maxVisibleTracks,
+    overflowTracks: soundtrackPlan.overflowTracks,
+    showTrackArtist: soundtrackPlan.showTrackArtist,
   };
 }
 

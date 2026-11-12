@@ -29,6 +29,7 @@ export interface StaticMapPlan {
   endPoint: ProjectedMapPoint | null;
   attribution: string;
   usesCarto: boolean;
+  isSinglePoint: boolean;
 }
 
 export interface ComputeStaticMapOptions {
@@ -43,10 +44,15 @@ export interface ComputeStaticMapOptions {
 export const STATIC_MAP_TILE_SIZE = 256;
 export const STATIC_MAP_MIN_ZOOM = 2;
 export const STATIC_MAP_MAX_ZOOM = 17;
+export const STATIC_MAP_SINGLE_POINT_ZOOM = 16;
 
 const MAX_MERCATOR_LAT = 85.05112878;
 const MAX_RENDER_POINTS = 350;
 const CARTO_SUBDOMAINS = ['a', 'b', 'c', 'd'] as const;
+
+export function buildOsmTileUrl(z: number, x: number, y: number): string {
+  return `https://tile.openstreetmap.org/${z}/${x}/${y}.png`;
+}
 
 export function latLngToWorldNorm(
   latitude: number,
@@ -79,14 +85,57 @@ export function buildStaticTileUrl(
   }
 
   return {
-    url: `https://tile.openstreetmap.org/${z}/${x}/${y}.png`,
+    url: buildOsmTileUrl(z, x, y),
     usesCarto: false,
   };
 }
 
+function buildTileGrid(
+  zoom: number,
+  originPxX: number,
+  originPxY: number,
+  width: number,
+  height: number,
+  theme: StaticMapTheme,
+  cartoApiKey: string
+): { tiles: StaticTileDescriptor[]; usesCarto: boolean } {
+  const tileCountPerAxis = Math.pow(2, zoom);
+  const maxTileIdx = tileCountPerAxis - 1;
+  const startTileX = Math.floor(originPxX / STATIC_MAP_TILE_SIZE);
+  const endTileX = Math.floor((originPxX + width - 0.001) / STATIC_MAP_TILE_SIZE);
+  const startTileY = Math.max(0, Math.floor(originPxY / STATIC_MAP_TILE_SIZE));
+  const endTileY = Math.min(
+    maxTileIdx,
+    Math.floor((originPxY + height - 0.001) / STATIC_MAP_TILE_SIZE)
+  );
+
+  const tiles: StaticTileDescriptor[] = [];
+  let usesCarto = false;
+
+  for (let ty = startTileY; ty <= endTileY; ty += 1) {
+    for (let tx = startTileX; tx <= endTileX; tx += 1) {
+      const wrappedTx = ((tx % tileCountPerAxis) + tileCountPerAxis) % tileCountPerAxis;
+      const tileInfo = buildStaticTileUrl(zoom, wrappedTx, ty, theme, cartoApiKey);
+      usesCarto = tileInfo.usesCarto;
+      tiles.push({
+        key: `${zoom}-${wrappedTx}-${ty}-${theme}`,
+        url: tileInfo.url,
+        x: wrappedTx,
+        y: ty,
+        z: zoom,
+        left: tx * STATIC_MAP_TILE_SIZE - originPxX,
+        top: ty * STATIC_MAP_TILE_SIZE - originPxY,
+        size: STATIC_MAP_TILE_SIZE,
+      });
+    }
+  }
+
+  return { tiles, usesCarto };
+}
+
 /**
  * Computes Web Mercator Slippy XYZ tiles covering the viewport plus exact pixel
- * polyline coordinates aligned mathematically to those tiles.
+ * polyline coordinates (or a single-point center pin when only 1 GPS fix exists).
  */
 export function computeStaticMapPlan({
   routePoints,
@@ -96,14 +145,47 @@ export function computeStaticMapPlan({
   theme = 'light',
   cartoApiKey = '',
 }: ComputeStaticMapOptions): StaticMapPlan | null {
-  if (!routePoints || routePoints.length < 2 || width <= 0 || height <= 0) {
+  if (!routePoints || routePoints.length === 0 || width <= 0 || height <= 0) {
     return null;
   }
 
-  const simplifiedSegments = simplifyRouteForSilhouette(routePoints, MAX_RENDER_POINTS);
+  const simplifiedSegments =
+    routePoints.length === 1
+      ? [[routePoints[0]]]
+      : simplifyRouteForSilhouette(routePoints, MAX_RENDER_POINTS);
   const flatPoints = simplifiedSegments.flat();
-  if (flatPoints.length < 2) {
+  if (flatPoints.length === 0) {
     return null;
+  }
+
+  if (flatPoints.length === 1) {
+    const singleZoom = Math.min(STATIC_MAP_MAX_ZOOM, STATIC_MAP_SINGLE_POINT_ZOOM);
+    const worldPx = STATIC_MAP_TILE_SIZE * Math.pow(2, singleZoom);
+    const norm = latLngToWorldNorm(flatPoints[0].latitude, flatPoints[0].longitude);
+    const originPxX = norm.x * worldPx - width / 2;
+    const originPxY = norm.y * worldPx - height / 2;
+    const { tiles, usesCarto } = buildTileGrid(
+      singleZoom,
+      originPxX,
+      originPxY,
+      width,
+      height,
+      theme,
+      cartoApiKey
+    );
+
+    return {
+      zoom: singleZoom,
+      width,
+      height,
+      tiles,
+      segments: [],
+      startPoint: { x: width / 2, y: height / 2 },
+      endPoint: null,
+      attribution: usesCarto ? '© OpenStreetMap · © CARTO' : '© OpenStreetMap',
+      usesCarto,
+      isSinglePoint: true,
+    };
   }
 
   const normalizedSegments = simplifiedSegments.map((segment) =>
@@ -146,42 +228,15 @@ export function computeStaticMapPlan({
   const originPxX = centerXNorm * worldPx - width / 2;
   const originPxY = centerYNorm * worldPx - height / 2;
 
-  const tileCountPerAxis = Math.pow(2, chosenZoom);
-  const maxTileIdx = tileCountPerAxis - 1;
-  const startTileX = Math.floor(originPxX / STATIC_MAP_TILE_SIZE);
-  const endTileX = Math.floor((originPxX + width - 0.001) / STATIC_MAP_TILE_SIZE);
-  const startTileY = Math.max(0, Math.floor(originPxY / STATIC_MAP_TILE_SIZE));
-  const endTileY = Math.min(
-    maxTileIdx,
-    Math.floor((originPxY + height - 0.001) / STATIC_MAP_TILE_SIZE)
+  const { tiles, usesCarto } = buildTileGrid(
+    chosenZoom,
+    originPxX,
+    originPxY,
+    width,
+    height,
+    theme,
+    cartoApiKey
   );
-
-  const tiles: StaticTileDescriptor[] = [];
-  let usesCarto = false;
-
-  for (let ty = startTileY; ty <= endTileY; ty += 1) {
-    for (let tx = startTileX; tx <= endTileX; tx += 1) {
-      const wrappedTx = ((tx % tileCountPerAxis) + tileCountPerAxis) % tileCountPerAxis;
-      const tileInfo = buildStaticTileUrl(
-        chosenZoom,
-        wrappedTx,
-        ty,
-        theme,
-        cartoApiKey
-      );
-      usesCarto = tileInfo.usesCarto;
-      tiles.push({
-        key: `${chosenZoom}-${wrappedTx}-${ty}-${theme}`,
-        url: tileInfo.url,
-        x: wrappedTx,
-        y: ty,
-        z: chosenZoom,
-        left: tx * STATIC_MAP_TILE_SIZE - originPxX,
-        top: ty * STATIC_MAP_TILE_SIZE - originPxY,
-        size: STATIC_MAP_TILE_SIZE,
-      });
-    }
-  }
 
   const projectedSegments = normalizedSegments
     .map((segment) =>
@@ -207,6 +262,7 @@ export function computeStaticMapPlan({
     endPoint,
     attribution: usesCarto ? '© OpenStreetMap · © CARTO' : '© OpenStreetMap',
     usesCarto,
+    isSinglePoint: false,
   };
 }
 

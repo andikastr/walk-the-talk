@@ -1,7 +1,9 @@
 import { describe, expect, it } from '@jest/globals';
 import {
+  buildOsmTileUrl,
   computeStaticMapPlan,
   latLngToWorldNorm,
+  STATIC_MAP_SINGLE_POINT_ZOOM,
   STATIC_MAP_TILE_SIZE,
 } from '@/services/location/static-map';
 import { computeShareCardLayout } from '@/components/workout/share-card-layout';
@@ -83,7 +85,7 @@ describe('services/location/static-map & share-card-layout', () => {
     expect(plan!.tiles[0].url).toContain('key=test_carto_key');
   });
 
-  it('returns null for indoor or single-point sessions without breaking', () => {
+  it('returns null when no points exist, and renders a centered zoom-16 basemap for a single GPS point', () => {
     expect(
       computeStaticMapPlan({
         routePoints: [],
@@ -91,46 +93,89 @@ describe('services/location/static-map & share-card-layout', () => {
         height: 160,
       })
     ).toBeNull();
-    expect(
-      computeStaticMapPlan({
-        routePoints: [sampleRoute[0]],
-        width: 280,
-        height: 160,
-      })
-    ).toBeNull();
+
+    const singlePlan = computeStaticMapPlan({
+      routePoints: [sampleRoute[0]],
+      width: 280,
+      height: 160,
+      cartoApiKey: 'test_carto_key',
+    });
+
+    expect(singlePlan).not.toBeNull();
+    expect(singlePlan!.isSinglePoint).toBe(true);
+    expect(singlePlan!.zoom).toBe(STATIC_MAP_SINGLE_POINT_ZOOM);
+    expect(singlePlan!.segments).toEqual([]);
+    expect(singlePlan!.startPoint).toEqual({ x: 140, y: 80 });
+    expect(singlePlan!.endPoint).toBeNull();
+    expect(singlePlan!.tiles.length).toBeGreaterThanOrEqual(2);
+    expect(buildOsmTileUrl(16, 123, 456)).toBe(
+      'https://tile.openstreetmap.org/16/123/456.png'
+    );
   });
 
-  it('keeps exact 3:4 (Post) and 9:16 (Story) ratios even when scaling for large playlists', () => {
-    for (const trackCount of [0, 1, 4, 12, 18]) {
-      const po = computeShareCardLayout('portrait', trackCount);
-      const st = computeShareCardLayout('story', trackCount);
+  it('locks strictly to 4:5 (Post) and 9:16 (Story) across Outdoor, Indoor, and 0..40 soundtracks', () => {
+    for (const hasMap of [true, false]) {
+      for (const trackCount of [0, 1, 3, 4, 8, 9, 15, 16, 24, 32, 40]) {
+        const po = computeShareCardLayout('portrait', trackCount, hasMap);
+        const st = computeShareCardLayout('story', trackCount, hasMap);
 
-      expect(po.height).toBeDefined();
-      expect(st.height).toBeDefined();
-      expect(po.width / (po.height ?? 1)).toBeCloseTo(3 / 4, 5);
-      expect(st.width / (st.height ?? 1)).toBeCloseTo(9 / 16, 5);
-      expect(po.hasMap).toBe(true);
-      expect(st.hasMap).toBe(true);
-      expect(po.mapWidth).toBeGreaterThan(0);
-      expect(po.mapHeight).toBeGreaterThan(0);
-      expect(st.mapHeight).toBeGreaterThan(0);
+        expect(po.width / po.height).toBeCloseTo(4 / 5, 5);
+        expect(st.width / st.height).toBeCloseTo(9 / 16, 5);
+        expect(po.width).toBe(384);
+        expect(po.height).toBe(480);
+        expect(st.width).toBe(324);
+        expect(st.height).toBe(576);
+        expect(po.stageWidth).toBeGreaterThan(0);
+        expect(po.stageHeight).toBeGreaterThan(0);
+        expect(st.stageHeight).toBeGreaterThan(0);
+
+        if (hasMap) {
+          expect(po.mapWidth).toBe(po.stageWidth);
+          expect(po.mapHeight).toBe(po.stageHeight);
+        } else {
+          expect(po.mapWidth).toBe(0);
+          expect(po.mapHeight).toBe(0);
+        }
+      }
     }
   });
 
-  it('omits map canvas dimensions and uses auto height for indoor workouts', () => {
-    for (const trackCount of [0, 1, 5]) {
-      const po = computeShareCardLayout('portrait', trackCount, false);
-      const st = computeShareCardLayout('story', trackCount, false);
-
-      expect(po.hasMap).toBe(false);
-      expect(po.mapWidth).toBe(0);
-      expect(po.mapHeight).toBe(0);
-      expect(po.height).toBeUndefined();
-      expect(st.hasMap).toBe(false);
-      expect(st.mapWidth).toBe(0);
-      expect(st.mapHeight).toBe(0);
-      expect(st.height).toBeUndefined();
-    }
+  it('uses adaptive 1->2->3->4 soundtrack columns with overflow capping', () => {
+    expect(computeShareCardLayout('portrait', 0)).toMatchObject({
+      trackColumns: 1,
+      maxVisibleTracks: 0,
+      overflowTracks: 0,
+    });
+    expect(computeShareCardLayout('portrait', 3)).toMatchObject({
+      trackColumns: 1,
+      maxVisibleTracks: 3,
+      overflowTracks: 0,
+      showTrackArtist: true,
+    });
+    expect(computeShareCardLayout('portrait', 8)).toMatchObject({
+      trackColumns: 2,
+      maxVisibleTracks: 8,
+      overflowTracks: 0,
+      showTrackArtist: true,
+    });
+    expect(computeShareCardLayout('portrait', 15)).toMatchObject({
+      trackColumns: 3,
+      maxVisibleTracks: 15,
+      overflowTracks: 0,
+      showTrackArtist: false,
+    });
+    expect(computeShareCardLayout('portrait', 40)).toMatchObject({
+      trackColumns: 4,
+      maxVisibleTracks: 24,
+      overflowTracks: 16,
+      showTrackArtist: false,
+    });
+    expect(computeShareCardLayout('story', 40)).toMatchObject({
+      trackColumns: 4,
+      maxVisibleTracks: 32,
+      overflowTracks: 8,
+      showTrackArtist: false,
+    });
   });
 });
 
