@@ -84,10 +84,12 @@ jobs:
           cache: 'gradle'
 
       # Pasang Android commandline-tools & setujui semua lisensi SDK/NDK/CMake otomatis
+      # Gunakan @v4 + explicit platform-tools agar tidak mencari package usang 'tools' yang sudah dihapus Google
       - name: 9. Setup Android SDK & Accept Licenses
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
         with:
           accept-android-sdk-licenses: 'true'
+          packages: 'platform-tools'
 
       # Compile APK release (arm64-v8a + R8 minify sesuai app.json)
       - name: 10. Build Release APK with Gradle
