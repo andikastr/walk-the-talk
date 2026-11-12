@@ -23,6 +23,7 @@ const mockDbState = {
   workouts: new Map<string, Record<string, any>>(),
   workoutPoints: [] as Record<string, any>[],
   workoutSplits: [] as Record<string, any>[],
+  workoutSoundtracks: [] as Record<string, any>[],
   activeCheckpointPoints: [] as StoredCheckpointPointRow[],
   appSettings: new Map<string, string>(),
   execCalls: [] as string[],
@@ -140,6 +141,20 @@ jest.mock('expo-sqlite', () => ({
         return { changes: params.length / 5, lastInsertRowId: 1 };
       }
 
+      if (normalized.startsWith('INSERT INTO workout_soundtracks ')) {
+        for (let i = 0; i < params.length; i += 6) {
+          mockDbState.workoutSoundtracks.push({
+            workout_id: params[i],
+            position: params[i + 1],
+            trackId: params[i + 2],
+            trackName: params[i + 3],
+            artist: params[i + 4],
+            playedAt: params[i + 5],
+          });
+        }
+        return { changes: params.length / 6, lastInsertRowId: 1 };
+      }
+
       if (normalized.startsWith('INSERT INTO active_checkpoint_points ')) {
         for (let i = 0; i < params.length; i += 8) {
           mockDbState.activeCheckpointPoints.push({
@@ -192,6 +207,9 @@ jest.mock('expo-sqlite', () => ({
         );
         mockDbState.workoutSplits = mockDbState.workoutSplits.filter(
           (s) => s.workout_id !== id
+        );
+        mockDbState.workoutSoundtracks = mockDbState.workoutSoundtracks.filter(
+          (t) => t.workout_id !== id
         );
         return { changes: 1, lastInsertRowId: 0 };
       }
@@ -277,6 +295,27 @@ jest.mock('expo-sqlite', () => ({
           .map(({ workout_id: _w, ...split }) => split);
       }
 
+      if (normalized.includes('FROM workout_soundtracks WHERE workout_id = ?')) {
+        return mockDbState.workoutSoundtracks
+          .filter((t) => t.workout_id === params[0])
+          .sort((a, b) => a.position - b.position)
+          .map(({ workout_id: _w, position: _p, ...track }) => track);
+      }
+
+      if (normalized.includes('FROM workout_soundtracks WHERE workout_id IN')) {
+        const idSet = new Set(params);
+        return mockDbState.workoutSoundtracks
+          .filter((t) => idSet.has(t.workout_id))
+          .sort((a, b) => {
+            const cmp = String(a.workout_id).localeCompare(String(b.workout_id));
+            return cmp !== 0 ? cmp : a.position - b.position;
+          })
+          .map(({ position: _p, workout_id, ...track }) => ({
+            workoutId: workout_id,
+            ...track,
+          }));
+      }
+
       if (normalized.includes('GROUP BY bucketIndex')) {
         const minStart = params[params.length - 2];
         const maxEnd = params[params.length - 1];
@@ -347,6 +386,7 @@ describe('services/database/workout-repo (O1–O3)', () => {
     mockDbState.workouts.clear();
     mockDbState.workoutPoints = [];
     mockDbState.workoutSplits = [];
+    mockDbState.workoutSoundtracks = [];
     mockDbState.activeCheckpointPoints = [];
     mockDbState.appSettings.clear();
     mockDbState.runCalls = [];
@@ -566,5 +606,62 @@ describe('services/database/workout-repo (O1–O3)', () => {
 
     const stats = await getWorkoutStats();
     expect(stats.totalWorkouts).toBe(5);
+  });
+
+  it('persists full unique soundtrack playlists, batches summaries, and falls back to legacy single-track rows', async () => {
+    await saveWorkout(
+      makeWorkout('w_playlist', {
+        startTime: 1_700_100_000_000,
+        soundtracks: [
+          { trackId: 't1', trackName: 'First Stride', artist: 'Artist A', playedAt: 1_700_100_010_000 },
+          { trackId: 't2', trackName: 'Second Wind', artist: 'Artist B', playedAt: 1_700_100_210_000 },
+          { trackId: 't1', trackName: 'First Stride', artist: 'Artist A', playedAt: 1_700_100_410_000 },
+        ],
+      })
+    );
+
+    // Simulate legacy DB row without workout_soundtracks rows
+    mockDbState.workouts.set('w_legacy', {
+      id: 'w_legacy',
+      type: 'walk',
+      title: 'Legacy Walk',
+      startTime: 1_700_050_000_000,
+      endTime: 1_700_051_000_000,
+      durationSeconds: 1000,
+      distanceMeters: 1500,
+      avgPaceSecondsPerKm: 666,
+      caloriesKcal: 90,
+      soundtrackTrackName: 'Old Track',
+      soundtrackArtist: 'Legacy Artist',
+      steps: 1800,
+      avgCadenceSpm: 108,
+      elevationGainMeters: 5,
+      isIndoorRaw: 0,
+    });
+
+    const detail = await getWorkoutById('w_playlist');
+    expect(detail?.soundtracks).toHaveLength(2);
+    expect(detail?.soundtracks?.map((t) => t.trackName)).toEqual([
+      'First Stride',
+      'Second Wind',
+    ]);
+    expect(detail?.soundtrackTrackName).toBe('First Stride');
+
+    const recent = await getRecentWorkouts(5);
+    const playlistSummary = recent.find((w) => w.id === 'w_playlist');
+    const legacySummary = recent.find((w) => w.id === 'w_legacy');
+
+    expect(playlistSummary?.soundtracks?.map((t) => t.trackName)).toEqual([
+      'First Stride',
+      'Second Wind',
+    ]);
+    expect(legacySummary?.soundtracks).toEqual([
+      { trackName: 'Old Track', artist: 'Legacy Artist' },
+    ]);
+
+    await deleteWorkout('w_playlist');
+    expect(
+      mockDbState.workoutSoundtracks.some((t) => t.workout_id === 'w_playlist')
+    ).toBe(false);
   });
 });

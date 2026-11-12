@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import {
+  ActivityIndicator,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -15,7 +16,9 @@ import { Music } from 'lucide-react-native';
 import { FONT_FAMILY, RADIUS, SPACING, TYPOGRAPHY } from '@/constants/Colors';
 import { usePreferences } from '@/context/AppPreferencesContext';
 import { formatDuration, formatPace, formatSteps } from '@/services/location/metrics';
+import { normalizeWorkoutSoundtracks } from '@/services/spotify/workout-soundtrack';
 import { AppDialogOverlay } from '@/components/ui/AppDialogOverlay';
+import type { WorkoutSoundtrackItem } from '@/types/workout';
 
 interface SaveWorkoutModalProps {
   visible: boolean;
@@ -25,8 +28,10 @@ interface SaveWorkoutModalProps {
   durationSeconds: number;
   avgPaceSeconds: number;
   steps: number;
+  soundtracks?: WorkoutSoundtrackItem[];
   soundtrackTrackName?: string;
   soundtrackArtistName?: string;
+  isSyncingSoundtracks?: boolean;
   onSave: () => Promise<void> | void;
   onDiscard: () => void;
 }
@@ -39,14 +44,22 @@ export function SaveWorkoutModal({
   durationSeconds,
   avgPaceSeconds,
   steps,
+  soundtracks,
   soundtrackTrackName,
   soundtrackArtistName,
+  isSyncingSoundtracks = false,
   onSave,
   onDiscard,
 }: SaveWorkoutModalProps) {
   const { palette, isDark, t } = usePreferences();
   const insets = useSafeAreaInsets();
   const [discardDialogVisible, setDiscardDialogVisible] = useState(false);
+
+  const resolvedSoundtracks = normalizeWorkoutSoundtracks({
+    soundtracks,
+    soundtrackTrackName,
+    soundtrackArtist: soundtrackArtistName,
+  });
 
   const handleRequestDiscard = () => {
     setDiscardDialogVisible(true);
@@ -153,7 +166,7 @@ export function SaveWorkoutModal({
                 </View>
               </View>
 
-              {soundtrackTrackName ? (
+              {(resolvedSoundtracks.length > 0 || isSyncingSoundtracks) ? (
                 <View
                   style={[
                     styles.soundtrackPreview,
@@ -161,14 +174,63 @@ export function SaveWorkoutModal({
                     isDark && { borderWidth: 1, borderColor: palette.border },
                   ]}
                 >
-                  <Music size={16} strokeWidth={2} color={palette.spotifyGreen} />
-                  <Text
-                    style={[styles.soundtrackPreviewText, { color: palette.onFeature }]}
-                    numberOfLines={1}
-                  >
-                    {t.saveModal.soundtrackPrefix}: {soundtrackTrackName}
-                    {soundtrackArtistName ? ` · ${soundtrackArtistName}` : ''}
-                  </Text>
+                  <View style={styles.soundtrackHeaderRow}>
+                    <View style={styles.soundtrackHeaderLeft}>
+                      <Music size={15} strokeWidth={2} color={palette.spotifyGreen} />
+                      <Text style={[styles.soundtrackHeaderTitle, { color: palette.onFeature }]}>
+                        {resolvedSoundtracks.length > 0
+                          ? t.saveModal.soundtrackCountLabel(resolvedSoundtracks.length)
+                          : t.saveModal.soundtrackPrefix}
+                      </Text>
+                    </View>
+                    {isSyncingSoundtracks ? (
+                      <ActivityIndicator size="small" color={palette.spotifyGreen} />
+                    ) : null}
+                  </View>
+
+                  {isSyncingSoundtracks && resolvedSoundtracks.length === 0 ? (
+                    <Text style={[styles.soundtrackSyncText, { color: palette.onFeatureMuted }]}>
+                      {t.saveModal.syncingSoundtrack}
+                    </Text>
+                  ) : null}
+
+                  {resolvedSoundtracks.length > 0 ? (
+                    <ScrollView
+                      style={styles.soundtrackListScroll}
+                      nestedScrollEnabled
+                      showsVerticalScrollIndicator={resolvedSoundtracks.length > 3}
+                    >
+                      {resolvedSoundtracks.map((track, idx) => (
+                        <View
+                          key={`${track.trackId ?? track.trackName}-${idx}`}
+                          style={[
+                            styles.soundtrackTrackRow,
+                            idx > 0 && styles.soundtrackTrackRowSpacing,
+                          ]}
+                        >
+                          <Text
+                            style={[styles.soundtrackTrackIndex, { color: palette.onFeatureMuted }]}
+                          >
+                            {String(idx + 1).padStart(2, '0')}
+                          </Text>
+                          <View style={styles.soundtrackTrackInfo}>
+                            <Text
+                              style={[styles.soundtrackPreviewText, { color: palette.onFeature }]}
+                              numberOfLines={1}
+                            >
+                              {track.trackName}
+                            </Text>
+                            <Text
+                              style={[styles.soundtrackTrackArtist, { color: palette.onFeatureMuted }]}
+                              numberOfLines={1}
+                            >
+                              {track.artist}
+                            </Text>
+                          </View>
+                        </View>
+                      ))}
+                    </ScrollView>
+                  ) : null}
                 </View>
               ) : null}
 
@@ -296,17 +358,57 @@ const styles = StyleSheet.create({
     fontSize: 18,
   },
   soundtrackPreview: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: SPACING.sm,
     padding: SPACING.md,
     borderRadius: RADIUS.md,
     borderCurve: 'continuous',
     marginBottom: SPACING.xl,
+    gap: SPACING.sm,
+  },
+  soundtrackHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: SPACING.sm,
+  },
+  soundtrackHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.xs,
+  },
+  soundtrackHeaderTitle: {
+    ...TYPOGRAPHY.caption,
+    fontFamily: FONT_FAMILY.bodySemiBold,
+  },
+  soundtrackSyncText: {
+    ...TYPOGRAPHY.caption,
+  },
+  soundtrackListScroll: {
+    maxHeight: 136,
+  },
+  soundtrackTrackRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.sm,
+  },
+  soundtrackTrackRowSpacing: {
+    marginTop: 6,
+  },
+  soundtrackTrackIndex: {
+    ...TYPOGRAPHY.numeralSm,
+    fontSize: 11,
+    width: 18,
+  },
+  soundtrackTrackInfo: {
+    flex: 1,
+    minWidth: 0,
   },
   soundtrackPreviewText: {
     ...TYPOGRAPHY.bodySm,
-    flex: 1,
+    fontFamily: FONT_FAMILY.bodySemiBold,
+  },
+  soundtrackTrackArtist: {
+    ...TYPOGRAPHY.caption,
+    fontSize: 11,
   },
   modalActions: {
     flexDirection: 'row',

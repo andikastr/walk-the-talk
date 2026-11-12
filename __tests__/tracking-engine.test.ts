@@ -10,6 +10,7 @@ import {
   evaluateIdleAutoPause,
   getElapsedActiveSeconds,
   processGpsLocationSample,
+  reconcileTotalHardwareStepsToCheckpoint,
   resolveStrideMeters,
 } from '@/services/location/tracking-engine';
 import { WORKOUT_CONFIG } from '@/constants/Config';
@@ -257,6 +258,114 @@ describe('services/location/tracking-engine', () => {
     expect(
       applyFallbackStepsToCheckpoint(indoorAfter.checkpoint, 500, start + 40_000, undefined, true)
     ).toBe(indoorAfter.checkpoint);
+  });
+
+  it('reconciles cumulative native total steps idempotently, advances indoor splits, and prevents false auto-pause on resume', () => {
+    const start = 4_000_000;
+    let indoorCp = createInitialCheckpoint({
+      type: 'run',
+      trackingMode: 'indoor',
+      autoPauseEnabled: true,
+      weightKg: 70,
+      now: start,
+    });
+
+    // User walked 1,000 steps in background up until 2s before unlocking screen at t = +300s
+    const resumeNow = start + 300_000;
+    const lastStepAt = resumeNow - 2_000;
+    const rec1 = reconcileTotalHardwareStepsToCheckpoint(
+      indoorCp,
+      1000,
+      resumeNow,
+      { run: 1.1 },
+      { isBackgroundReconcile: true, stepTimestampMs: lastStepAt }
+    );
+    expect(rec1.appliedStepDelta).toBe(1000);
+    expect(rec1.checkpoint.steps).toBe(1000);
+    expect(rec1.checkpoint.lastSyncedNativeSteps).toBe(1000);
+    expect(rec1.checkpoint.distanceMeters).toBeCloseTo(1100, 4);
+    expect(rec1.checkpoint.splits).toHaveLength(1);
+    expect(rec1.checkpoint.splits[0].kmNumber).toBe(1);
+
+    // Since native stepTimestampMs was 2s ago (< autoPauseIdleMs), immediate idle check must NOT auto-pause
+    expect(evaluateIdleAutoPause(rec1.checkpoint, resumeNow)).toBeNull();
+
+    // Duplicate delivery of same cumulative totalSteps=1000 must be a no-op
+    const recDup = reconcileTotalHardwareStepsToCheckpoint(
+      rec1.checkpoint,
+      1000,
+      resumeNow + 500,
+      { run: 1.1 }
+    );
+    expect(recDup.appliedStepDelta).toBe(0);
+    expect(recDup.checkpoint).toBe(rec1.checkpoint);
+
+    // Auto-pause, then accumulate native steps one-by-one until autoResumeMinSteps
+    const autoPaused = evaluateIdleAutoPause(
+      rec1.checkpoint,
+      lastStepAt + WORKOUT_CONFIG.autoPauseIdleMs
+    );
+    expect(autoPaused).not.toBeNull();
+    expect(autoPaused!.isAutoPaused).toBe(true);
+
+    // Sub-threshold total (1000 -> 1002) leaves lastSyncedNativeSteps at 1000 so steps buffer
+    const subTotal = reconcileTotalHardwareStepsToCheckpoint(
+      autoPaused!,
+      1002,
+      lastStepAt + WORKOUT_CONFIG.autoPauseIdleMs + 2000,
+      { run: 1.1 }
+    );
+    expect(subTotal.appliedStepDelta).toBe(0);
+    expect(subTotal.didAutoResume).toBe(false);
+    expect(subTotal.checkpoint.lastSyncedNativeSteps).toBe(1000);
+
+    // Crossing threshold (1000 -> 1000 + autoResumeMinSteps) auto-resumes and applies all steps
+    const resumeTotal = 1000 + WORKOUT_CONFIG.autoResumeMinSteps;
+    const resumed = reconcileTotalHardwareStepsToCheckpoint(
+      subTotal.checkpoint,
+      resumeTotal,
+      lastStepAt + WORKOUT_CONFIG.autoPauseIdleMs + 4000,
+      { run: 1.1 }
+    );
+    expect(resumed.didAutoResume).toBe(true);
+    expect(resumed.checkpoint.isAutoPaused).toBe(false);
+    expect(resumed.checkpoint.steps).toBe(resumeTotal);
+    expect(resumed.checkpoint.lastSyncedNativeSteps).toBe(resumeTotal);
+  });
+
+  it('replaces outdoor background fallback steps cleanly via cumulative native snapshot reconciliation', () => {
+    const start = 5_000_000;
+    let outdoorCp = createInitialCheckpoint({
+      type: 'walk',
+      trackingMode: 'outdoor',
+      autoPauseEnabled: false,
+      weightKg: 65,
+      now: start,
+    });
+
+    // GPS background task added 100 fallback steps for 72m while screen was off
+    outdoorCp = applyFallbackStepsToCheckpoint(
+      outdoorCp,
+      72,
+      start + 40_000,
+      undefined,
+      true
+    );
+    expect(outdoorCp.steps).toBe(100);
+    expect(outdoorCp.fallbackBgStepsAdded).toBe(100);
+
+    // Native background pedometer counted 130 cumulative session steps -> swap 100 fallback, add +30 net
+    const rec = reconcileTotalHardwareStepsToCheckpoint(
+      outdoorCp,
+      130,
+      start + 45_000,
+      undefined,
+      { isBackgroundReconcile: true, stepTimestampMs: start + 44_000 }
+    );
+    expect(rec.appliedStepDelta).toBe(130);
+    expect(rec.checkpoint.steps).toBe(130);
+    expect(rec.checkpoint.fallbackBgStepsAdded).toBe(0);
+    expect(rec.checkpoint.lastSyncedNativeSteps).toBe(130);
   });
 });
 

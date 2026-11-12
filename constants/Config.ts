@@ -18,6 +18,7 @@ export const SPOTIFY_CONFIG = {
     'user-read-playback-state',     // Status playback & device
     'user-modify-playback-state',   // Kontrol play, pause, skip
     'user-read-currently-playing',  // Lagu aktif
+    'user-read-recently-played',    // Riwayat lagu saat background / layar mati
     'playlist-read-private',        // Playlist workout pengguna
     'user-read-private',            // Info profil pengguna
     'user-read-email',              // Info tipe akun (premium vs free)
@@ -29,6 +30,7 @@ export const SPOTIFY_CONFIG = {
     refreshToken: 'spotify_refresh_token',
     expiresAt: 'spotify_expires_at',
     userProfile: 'spotify_user_profile',
+    grantedScope: 'spotify_granted_scope',
   },
 };
 

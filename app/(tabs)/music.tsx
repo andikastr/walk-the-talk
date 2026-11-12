@@ -52,6 +52,7 @@ export default function MusicScreen() {
   const {
     isAuthenticated,
     isLoading: isAuthLoading,
+    hasRecentlyPlayedPermission,
     user,
     login,
     completeManualAuth,
@@ -372,6 +373,40 @@ export default function MusicScreen() {
           <Text style={[styles.freeNoticeText, { color: palette.onSurfaceVariant }]}>
             {t.music.freeNotice}
           </Text>
+        </View>
+      )}
+
+      {!hasRecentlyPlayedPermission && (
+        <View
+          style={[
+            styles.scopeNoticeBox,
+            { backgroundColor: palette.surfaceAlt },
+            darkSurfaceBorder,
+          ]}
+        >
+          <View style={styles.scopeNoticeBody}>
+            <Text style={[styles.scopeNoticeTitle, { color: palette.onSurface }]}>
+              {t.music.reconnectScopeTitle}
+            </Text>
+            <Text style={[styles.scopeNoticeText, { color: palette.onSurfaceVariant }]}>
+              {t.music.reconnectScopeMessage}
+            </Text>
+          </View>
+          <Pressable
+            style={({ pressed }) => [
+              styles.scopeReconnectBtn,
+              { backgroundColor: palette.spotifyGreen },
+              pressed && { opacity: 0.85 },
+            ]}
+            onPress={() => {
+              void (async () => {
+                await logout();
+                await login();
+              })();
+            }}
+          >
+            <Text style={styles.scopeReconnectBtnText}>{t.music.reconnectScopeBtn}</Text>
+          </Pressable>
         </View>
       )}
 
@@ -815,6 +850,36 @@ const styles = StyleSheet.create({
     ...TYPOGRAPHY.bodySm,
     lineHeight: 18,
     flex: 1,
+  },
+  scopeNoticeBox: {
+    marginHorizontal: SPACING.gutter,
+    marginBottom: SPACING.md,
+    borderRadius: RADIUS.md,
+    borderCurve: 'continuous',
+    padding: 14,
+    gap: 10,
+  },
+  scopeNoticeBody: {
+    gap: 3,
+  },
+  scopeNoticeTitle: {
+    ...TYPOGRAPHY.labelMd,
+    fontFamily: FONT_FAMILY.displaySemiBold,
+  },
+  scopeNoticeText: {
+    ...TYPOGRAPHY.bodySm,
+    lineHeight: 18,
+  },
+  scopeReconnectBtn: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: RADIUS.full,
+  },
+  scopeReconnectBtnText: {
+    fontFamily: FONT_FAMILY.displaySemiBold,
+    color: '#FFFFFF',
+    fontSize: 12,
   },
   deviceCard: {
     marginHorizontal: SPACING.gutter,

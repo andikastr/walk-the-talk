@@ -1,4 +1,5 @@
 import { spotifyFetch } from './client';
+import { toWorkoutSoundtrackItem } from './workout-soundtrack';
 import {
   SpotifyPlaybackState,
   SpotifyDevice,
@@ -6,6 +7,7 @@ import {
   SpotifyPlaylist,
   SpotifyTrack,
 } from '@/types/spotify';
+import type { WorkoutSoundtrackItem } from '@/types/workout';
 
 /**
  * Mengambil profil pengguna yang sedang login
@@ -144,5 +146,54 @@ export async function getPlaylistItems(playlistId: string, limit: number = 20): 
     `/playlists/${playlistId}/items?limit=${limit}`
   );
   return (res.items || []).map((item) => item.track).filter((t): t is SpotifyTrack => t !== null);
+}
+
+interface RecentlyPlayedItemPayload {
+  track?: SpotifyTrack | null;
+  played_at?: string;
+}
+
+export interface RecentlyPlayedResult {
+  items: WorkoutSoundtrackItem[];
+  missingScope: boolean;
+}
+
+/**
+ * Mengambil riwayat lagu yang baru selesai diputar (termasuk saat app di background / layar mati).
+ * Endpoint: GET /v1/me/player/recently-played
+ * Memerlukan scope `user-read-recently-played`; mengembalikan `missingScope: true` pada HTTP 403
+ * agar token lama tanpa scope tetap fallback mulus tanpa memblokir simpan workout.
+ */
+export async function getRecentlyPlayedTracks(options?: {
+  afterMs?: number;
+  limit?: number;
+}): Promise<RecentlyPlayedResult> {
+  const limit = Math.min(Math.max(options?.limit ?? 50, 1), 50);
+  const query = new URLSearchParams({ limit: String(limit) });
+  if (typeof options?.afterMs === 'number' && Number.isFinite(options.afterMs)) {
+    query.set('after', String(Math.max(0, Math.floor(options.afterMs))));
+  }
+
+  try {
+    const res = await spotifyFetch<{ items?: RecentlyPlayedItemPayload[] }>(
+      `/me/player/recently-played?${query.toString()}`
+    );
+    const items = (res.items || [])
+      .map((entry) => {
+        const parsedAt = entry.played_at ? Date.parse(entry.played_at) : NaN;
+        const playedAt = Number.isFinite(parsedAt) ? parsedAt : undefined;
+        return toWorkoutSoundtrackItem(entry.track, playedAt);
+      })
+      .filter((item): item is WorkoutSoundtrackItem => item !== null)
+      .sort((a, b) => (a.playedAt ?? 0) - (b.playedAt ?? 0));
+
+    return { items, missingScope: false };
+  } catch (err: any) {
+    if (err?.status === 403) {
+      return { items: [], missingScope: true };
+    }
+    console.warn('Gagal mengambil recently played Spotify:', err?.message || err);
+    return { items: [], missingScope: false };
+  }
 }
 

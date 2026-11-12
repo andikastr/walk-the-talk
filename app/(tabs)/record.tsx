@@ -19,14 +19,17 @@ import {
 } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import { useWorkoutSession } from '@/hooks/useWorkoutSession';
+import { useSpotifyAuth } from '@/hooks/useSpotifyAuth';
 import { useSpotifyPlayer, useSpotifyPlayerFocus } from '@/hooks/useSpotifyPlayer';
+import { getPlaybackState, getRecentlyPlayedTracks } from '@/services/spotify/player';
+import { toWorkoutSoundtrackItem } from '@/services/spotify/workout-soundtrack';
 import { LiveStatsHUD } from '@/components/workout/LiveStatsHUD';
 import { WorkoutControls } from '@/components/workout/WorkoutControls';
 import { WorkoutMap } from '@/components/map/WorkoutMap';
 import { SplitsTable } from '@/components/workout/SplitsTable';
 import { RunnerMiniPlayer } from '@/components/spotify/RunnerMiniPlayer';
 import { SaveWorkoutModal } from '@/components/workout/SaveWorkoutModal';
-import { WorkoutType } from '@/types/workout';
+import { WorkoutSoundtrackItem, WorkoutType } from '@/types/workout';
 import { FONT_FAMILY, RADIUS, SPACING, TYPOGRAPHY } from '@/constants/Colors';
 import { getActivityLabel } from '@/constants/i18n';
 import { usePreferences } from '@/context/AppPreferencesContext';
@@ -57,6 +60,8 @@ export default function RecordScreen() {
     stepTrackingMode,
     routeCoordinates,
     splits,
+    sessionSoundtracks,
+    workoutStartTime,
     currentLocation,
     gpsSignal,
     gpsAccuracyMeters,
@@ -69,6 +74,8 @@ export default function RecordScreen() {
     setTrackingMode,
     refreshLocationPermission,
     requestBackgroundLocationPermission,
+    recordPlayedTrack,
+    mergeSessionSoundtracks,
     startWorkout,
     pauseWorkout,
     resumeWorkout,
@@ -79,14 +86,27 @@ export default function RecordScreen() {
     dismissPendingWorkout,
   } = useWorkoutSession();
 
-  const { currentTrack } = useSpotifyPlayer();
+  const { isAuthenticated: isSpotifyAuthenticated } = useSpotifyAuth();
+  const { currentTrack, isPlaying } = useSpotifyPlayer();
   useSpotifyPlayerFocus();
 
   const [selectedType, setSelectedType] = useState<WorkoutType>('run');
   const [viewMode, setViewMode] = useState<'map' | 'splits'>('map');
   const [saveModalVisible, setSaveModalVisible] = useState(false);
   const [workoutTitle, setWorkoutTitle] = useState('');
+  const [isSyncingSoundtracks, setIsSyncingSoundtracks] = useState(false);
   const recoveryPromptHandledRef = useRef(false);
+  const soundtrackSyncPromiseRef = useRef<Promise<WorkoutSoundtrackItem[] | null> | null>(null);
+  const soundtrackSyncRunIdRef = useRef(0);
+
+  // Rekam lagu yang sedang diputar ke daftar soundtrack sesi selama sesi aktif merekam
+  useEffect(() => {
+    if (status !== 'recording' || !isPlaying || !currentTrack) return;
+    const item = toWorkoutSoundtrackItem(currentTrack, Date.now());
+    if (item) {
+      recordPlayedTrack(item);
+    }
+  }, [status, isPlaying, currentTrack, recordPlayedTrack]);
 
   // Tampilkan prompt pemulihan sesi bila aplikasi sempat tertutup saat sesi aktif
   useEffect(() => {
@@ -166,6 +186,12 @@ export default function RecordScreen() {
     }
 
     await startWorkout(selectedType);
+    if (isPlaying && currentTrack) {
+      const initialTrack = toWorkoutSoundtrackItem(currentTrack, Date.now());
+      if (initialTrack) {
+        recordPlayedTrack(initialTrack);
+      }
+    }
   };
 
   const handleStop = async () => {
@@ -180,7 +206,16 @@ export default function RecordScreen() {
 
     if (!confirmed) return;
 
+    if (isPlaying && currentTrack) {
+      const stopTrack = toWorkoutSoundtrackItem(currentTrack, Date.now());
+      if (stopTrack) {
+        recordPlayedTrack(stopTrack);
+      }
+    }
+
+    const sessionStartMs = workoutStartTime ?? Date.now() - durationSeconds * 1000;
     await stopWorkout();
+
     const now = new Date();
     const hour = now.getHours();
     const timeGreeting =
@@ -194,22 +229,67 @@ export default function RecordScreen() {
     const typeLabel = getActivityLabel(workoutType || selectedType, t);
     setWorkoutTitle(`${typeLabel} ${timeGreeting}`);
     setSaveModalVisible(true);
+
+    if (isSpotifyAuthenticated) {
+      const runId = ++soundtrackSyncRunIdRef.current;
+      setIsSyncingSoundtracks(true);
+      const syncPromise = (async (): Promise<WorkoutSoundtrackItem[] | null> => {
+        try {
+          const [playbackState, recentlyPlayed] = await Promise.all([
+            getPlaybackState().catch(() => null),
+            getRecentlyPlayedTracks({ afterMs: sessionStartMs }),
+          ]);
+
+          const fetchedItems: WorkoutSoundtrackItem[] = [];
+          if (playbackState?.is_playing && playbackState.item) {
+            const currentItem = toWorkoutSoundtrackItem(playbackState.item, Date.now());
+            if (currentItem) fetchedItems.push(currentItem);
+          }
+          fetchedItems.push(...recentlyPlayed.items);
+
+          if (soundtrackSyncRunIdRef.current !== runId) {
+            return null;
+          }
+          return mergeSessionSoundtracks(fetchedItems, Date.now());
+        } catch {
+          return null;
+        } finally {
+          if (soundtrackSyncRunIdRef.current === runId) {
+            setIsSyncingSoundtracks(false);
+          }
+        }
+      })();
+      soundtrackSyncPromiseRef.current = syncPromise;
+    } else {
+      soundtrackSyncPromiseRef.current = null;
+      setIsSyncingSoundtracks(false);
+    }
   };
 
   const handleConfirmSave = async () => {
-    const soundtrack = currentTrack
-      ? {
-          trackName: currentTrack.name,
-          artist: currentTrack.artists?.map((a) => a.name).join(', ') || 'Unknown',
+    let syncedSoundtracks: WorkoutSoundtrackItem[] | undefined;
+    if (soundtrackSyncPromiseRef.current) {
+      try {
+        const result = await soundtrackSyncPromiseRef.current;
+        if (result) {
+          syncedSoundtracks = result;
         }
-      : undefined;
+      } catch {
+        // Ignore sync errors cleanly so saving never blocks
+      }
+    }
 
-    const saved = await saveCurrentWorkout(workoutTitle, soundtrack);
+    const saved = await saveCurrentWorkout(workoutTitle, syncedSoundtracks);
+    soundtrackSyncPromiseRef.current = null;
+    setIsSyncingSoundtracks(false);
     setSaveModalVisible(false);
     router.push(`/workout/${saved.id}` as any);
   };
 
   const handleDiscard = () => {
+    soundtrackSyncRunIdRef.current += 1;
+    soundtrackSyncPromiseRef.current = null;
+    setIsSyncingSoundtracks(false);
     setSaveModalVisible(false);
     void resetWorkout();
   };
@@ -629,8 +709,8 @@ export default function RecordScreen() {
         durationSeconds={durationSeconds}
         avgPaceSeconds={avgPaceSeconds}
         steps={steps}
-        soundtrackTrackName={currentTrack?.name}
-        soundtrackArtistName={currentTrack?.artists?.[0]?.name}
+        soundtracks={sessionSoundtracks}
+        isSyncingSoundtracks={isSyncingSoundtracks}
         onSave={handleConfirmSave}
         onDiscard={handleDiscard}
       />

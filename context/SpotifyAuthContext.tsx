@@ -10,6 +10,7 @@ import React, {
 import {
   clearTokens,
   completeAuthWithUrl,
+  hasRecentlyPlayedScope,
   isSpotifyAuthenticated,
   loginWithSpotify,
 } from '@/services/spotify/auth';
@@ -20,6 +21,7 @@ import { SpotifyUser } from '@/types/spotify';
 interface SpotifyAuthContextValue {
   isAuthenticated: boolean;
   isLoading: boolean;
+  hasRecentlyPlayedPermission: boolean;
   user: SpotifyUser | null;
   error: string | null;
   login: () => Promise<boolean>;
@@ -39,6 +41,8 @@ export function SpotifyAuthProvider({
 }) {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [hasRecentlyPlayedPermission, setHasRecentlyPlayedPermission] =
+    useState<boolean>(true);
   const [user, setUser] = useState<SpotifyUser | null>(null);
   const [error, setError] = useState<string | null>(null);
   const isMountedRef = useRef<boolean>(true);
@@ -53,6 +57,10 @@ export function SpotifyAuthProvider({
       setIsAuthenticated(authed);
 
       if (authed) {
+        const hasHistoryScope = await hasRecentlyPlayedScope();
+        if (isMountedRef.current) {
+          setHasRecentlyPlayedPermission(hasHistoryScope);
+        }
         try {
           const profile = await getCurrentUser();
           if (isMountedRef.current) {
@@ -63,10 +71,12 @@ export function SpotifyAuthProvider({
           if (err?.status === 401 && isMountedRef.current) {
             setIsAuthenticated(false);
             setUser(null);
+            setHasRecentlyPlayedPermission(false);
           }
         }
       } else {
         setUser(null);
+        setHasRecentlyPlayedPermission(false);
       }
     } catch (err: any) {
       if (isMountedRef.current) {
@@ -92,6 +102,10 @@ export function SpotifyAuthProvider({
         setIsAuthenticated(authed);
 
         if (authed) {
+          const hasHistoryScope = await hasRecentlyPlayedScope();
+          if (isMountedRef.current) {
+            setHasRecentlyPlayedPermission(hasHistoryScope);
+          }
           try {
             const profile = await getCurrentUser();
             if (isMountedRef.current) {
@@ -102,10 +116,12 @@ export function SpotifyAuthProvider({
             if (err?.status === 401 && isMountedRef.current) {
               setIsAuthenticated(false);
               setUser(null);
+              setHasRecentlyPlayedPermission(false);
             }
           }
         } else {
           setUser(null);
+          setHasRecentlyPlayedPermission(false);
         }
       } catch (err: any) {
         if (isMountedRef.current) {
@@ -184,6 +200,7 @@ export function SpotifyAuthProvider({
       setError(null);
       // Kosongkan state auth secara global terlebih dahulu agar seluruh tab langsung sinkron
       setIsAuthenticated(false);
+      setHasRecentlyPlayedPermission(false);
       setUser(null);
       await clearTokens();
     } catch (err: any) {
@@ -203,6 +220,7 @@ export function SpotifyAuthProvider({
     () => ({
       isAuthenticated,
       isLoading,
+      hasRecentlyPlayedPermission,
       user,
       error,
       login,
@@ -213,6 +231,7 @@ export function SpotifyAuthProvider({
     [
       isAuthenticated,
       isLoading,
+      hasRecentlyPlayedPermission,
       user,
       error,
       login,

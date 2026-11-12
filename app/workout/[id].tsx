@@ -11,6 +11,7 @@ import {
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Activity, AlertCircle, Flame, Footprints, Music, Share2 } from 'lucide-react-native';
 import { getWorkoutById } from '@/services/database/workout-repo';
+import { normalizeWorkoutSoundtracks } from '@/services/spotify/workout-soundtrack';
 import { WorkoutRecord } from '@/types/workout';
 import { WorkoutMap } from '@/components/map/WorkoutMap';
 import { SplitsTable } from '@/components/workout/SplitsTable';
@@ -282,41 +283,77 @@ export default function WorkoutDetailScreen() {
       </Pressable>
 
       {/* Soundtrack Dark Ink Card */}
-      {workout.soundtrackTrackName && (
-        <View
-          style={[
-            styles.soundtrackCard,
-            { backgroundColor: palette.surfaceFeature },
-            darkSurfaceBorder,
-          ]}
-        >
-          <View style={styles.soundtrackHeader}>
-            <KickerText inverse style={{ color: palette.primary }}>
-              {t.workoutDetail.soundtrackKicker}
-            </KickerText>
-            <SpotifyAttribution size="small" variant="dark" />
-          </View>
-          <View style={styles.soundtrackContent}>
-            <View style={styles.soundtrackThumb}>
-              <Music size={20} strokeWidth={2} color={palette.spotifyGreen} />
+      {(() => {
+        const workoutSoundtracks = normalizeWorkoutSoundtracks(workout);
+        if (workoutSoundtracks.length === 0) return null;
+        return (
+          <View
+            style={[
+              styles.soundtrackCard,
+              { backgroundColor: palette.surfaceFeature },
+              darkSurfaceBorder,
+            ]}
+          >
+            <View style={styles.soundtrackHeader}>
+              <View style={styles.soundtrackHeaderTitleGroup}>
+                <KickerText inverse style={{ color: palette.primary }}>
+                  {t.workoutDetail.soundtrackKicker}
+                </KickerText>
+                <Text
+                  style={[
+                    styles.soundtrackCountSubtitle,
+                    { color: palette.onFeatureMuted },
+                  ]}
+                >
+                  {t.workoutDetail.soundtracksTitle(workoutSoundtracks.length)}
+                </Text>
+              </View>
+              <SpotifyAttribution size="small" variant="dark" />
             </View>
-            <View style={{ marginLeft: SPACING.md, flex: 1, minWidth: 0 }}>
-              <Text
-                style={[styles.soundtrackTitle, { color: palette.onFeature }]}
-                numberOfLines={1}
-              >
-                {workout.soundtrackTrackName}
-              </Text>
-              <Text
-                style={[styles.soundtrackArtist, { color: palette.onFeatureMuted }]}
-                numberOfLines={1}
-              >
-                {workout.soundtrackArtist}
-              </Text>
+
+            <View style={styles.soundtrackTrackList}>
+              {workoutSoundtracks.map((track, idx) => (
+                <View
+                  key={`${track.trackId ?? track.trackName}-${idx}`}
+                  style={[
+                    styles.soundtrackContent,
+                    idx > 0 && styles.soundtrackRowDivider,
+                  ]}
+                >
+                  <View style={styles.soundtrackThumb}>
+                    {idx === 0 ? (
+                      <Music size={17} strokeWidth={2} color={palette.spotifyGreen} />
+                    ) : (
+                      <Text
+                        style={[
+                          styles.soundtrackIndexText,
+                          { color: palette.onFeatureMuted },
+                        ]}
+                      >
+                        {String(idx + 1).padStart(2, '0')}
+                      </Text>
+                    )}
+                  </View>
+                  <View style={styles.soundtrackTrackMeta}>
+                    <Text
+                      style={[styles.soundtrackTitle, { color: palette.onFeature }]}
+                      numberOfLines={1}
+                    >
+                      {track.trackName}
+                    </Text>
+                    <Text
+                      style={[styles.soundtrackArtist, { color: palette.onFeatureMuted }]}
+                      numberOfLines={1}
+                    >
+                      {track.artist}
+                    </Text>
+                  </View>
+                </View>
+              ))}
             </View>
           </View>
-        </View>
-      )}
+        );
+      })()}
 
       {/* Splits Table */}
       <View style={styles.splitsSection}>
@@ -506,21 +543,46 @@ const styles = StyleSheet.create({
   soundtrackHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     marginBottom: SPACING.md,
+    gap: SPACING.sm,
+  },
+  soundtrackHeaderTitleGroup: {
+    gap: 2,
+  },
+  soundtrackCountSubtitle: {
+    ...TYPOGRAPHY.caption,
+  },
+  soundtrackTrackList: {
+    gap: SPACING.xs,
   },
   soundtrackContent: {
     flexDirection: 'row',
     alignItems: 'center',
+    paddingVertical: 6,
+  },
+  soundtrackRowDivider: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: 'rgba(244, 242, 236, 0.12)',
+    paddingTop: 10,
   },
   soundtrackThumb: {
-    width: 48,
-    height: 48,
-    borderRadius: RADIUS.md,
+    width: 38,
+    height: 38,
+    borderRadius: RADIUS.sm,
     borderCurve: 'continuous',
     backgroundColor: 'rgba(244, 242, 236, 0.08)',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  soundtrackIndexText: {
+    ...TYPOGRAPHY.numeralSm,
+    fontSize: 12,
+  },
+  soundtrackTrackMeta: {
+    marginLeft: SPACING.md,
+    flex: 1,
+    minWidth: 0,
   },
   soundtrackTitle: {
     ...TYPOGRAPHY.cardTitle,

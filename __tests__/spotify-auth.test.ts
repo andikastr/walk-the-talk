@@ -3,6 +3,7 @@ import { SPOTIFY_CONFIG } from '@/constants/Config';
 import {
   clearTokens,
   getValidAccessToken,
+  hasRecentlyPlayedScope,
   refreshAccessToken,
 } from '@/services/spotify/auth';
 
@@ -192,5 +193,32 @@ describe('services/spotify/auth', () => {
 
     expect(await getValidAccessToken()).toBe('refreshed-access');
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('tracks granted recently-played scope and clears it on logout', async () => {
+    expect(await hasRecentlyPlayedScope()).toBe(false);
+
+    mockSecureStoreMemory.set(SPOTIFY_CONFIG.storageKeys.accessToken, 'expired-access');
+    mockSecureStoreMemory.set(SPOTIFY_CONFIG.storageKeys.refreshToken, 'valid-refresh');
+    mockSecureStoreMemory.set(
+      SPOTIFY_CONFIG.storageKeys.expiresAt,
+      (Date.now() - 1000).toString()
+    );
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        access_token: 'scoped-access',
+        expires_in: 3600,
+        token_type: 'Bearer',
+        scope: 'user-read-playback-state user-read-recently-played',
+      }),
+    } as Response);
+
+    await getValidAccessToken();
+    expect(await hasRecentlyPlayedScope()).toBe(true);
+
+    await clearTokens();
+    expect(await hasRecentlyPlayedScope()).toBe(false);
   });
 });

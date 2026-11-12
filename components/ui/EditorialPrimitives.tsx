@@ -24,6 +24,7 @@ import { getActivityLabel } from '@/constants/i18n';
 import { usePreferences } from '@/context/AppPreferencesContext';
 import { WorkoutRecord } from '@/types/workout';
 import { formatDuration } from '@/services/location/metrics';
+import { normalizeWorkoutSoundtracks } from '@/services/spotify/workout-soundtrack';
 
 /**
  * Label uppercase all-caps berjarak +0.18em (1.8px) ciri khas DESIGN.md.
@@ -185,6 +186,7 @@ export const ActivityRowCard = React.memo(function ActivityRowCard({
 
   const typeLabel = getActivityLabel(workout.type, t, true);
   const distKm = (workout.distanceMeters / 1000).toFixed(2);
+  const soundtracks = normalizeWorkoutSoundtracks(workout);
 
   const renderActivityGlyph = () => {
     if (workout.type === 'walk') {
@@ -242,15 +244,30 @@ export const ActivityRowCard = React.memo(function ActivityRowCard({
           </Text>
         </View>
 
-        {workout.soundtrackTrackName ? (
-          <View style={styles.soundtrackInline}>
-            <Music size={12} strokeWidth={2} color={palette.onSurfaceVariant} />
-            <Text
-              style={[styles.soundtrackInlineText, { color: palette.onSurfaceVariant }]}
-              numberOfLines={1}
-            >
-              {workout.soundtrackTrackName}
-            </Text>
+        {soundtracks.length > 0 ? (
+          <View style={styles.soundtrackList}>
+            {soundtracks.map((track, idx) => (
+              <View
+                key={`${track.trackId ?? track.trackName}-${idx}`}
+                style={styles.soundtrackInline}
+              >
+                <Music
+                  size={11}
+                  strokeWidth={2}
+                  color={idx === 0 ? palette.spotifyGreen : palette.onSurfaceVariant}
+                />
+                <Text
+                  style={[
+                    styles.soundtrackInlineText,
+                    { color: palette.onSurfaceVariant },
+                  ]}
+                  numberOfLines={1}
+                >
+                  {track.trackName}
+                  {track.artist ? ` · ${track.artist}` : ''}
+                </Text>
+              </View>
+            ))}
           </View>
         ) : null}
       </View>
@@ -381,11 +398,14 @@ const styles = StyleSheet.create({
     width: 1,
     height: 12,
   },
+  soundtrackList: {
+    marginTop: 6,
+    gap: 3,
+  },
   soundtrackInline: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    marginTop: 6,
   },
   soundtrackInlineText: {
     ...TYPOGRAPHY.labelSm,

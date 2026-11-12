@@ -239,6 +239,10 @@ async function saveTokens(data: SpotifyTokenResponse): Promise<void> {
     await SecureStore.setItemAsync(SPOTIFY_CONFIG.storageKeys.refreshToken, data.refresh_token);
   }
 
+  if (typeof data.scope === 'string' && data.scope.trim().length > 0) {
+    await SecureStore.setItemAsync(SPOTIFY_CONFIG.storageKeys.grantedScope, data.scope.trim());
+  }
+
   // Simpan timestamp kedaluwarsa (berikan buffer 60 detik)
   const expiresAt = Date.now() + (data.expires_in - 60) * 1000;
   await SecureStore.setItemAsync(SPOTIFY_CONFIG.storageKeys.expiresAt, expiresAt.toString());
@@ -333,7 +337,23 @@ export async function clearTokens(): Promise<void> {
   await SecureStore.deleteItemAsync(SPOTIFY_CONFIG.storageKeys.refreshToken);
   await SecureStore.deleteItemAsync(SPOTIFY_CONFIG.storageKeys.expiresAt);
   await SecureStore.deleteItemAsync(SPOTIFY_CONFIG.storageKeys.userProfile);
+  await SecureStore.deleteItemAsync(SPOTIFY_CONFIG.storageKeys.grantedScope);
   await SecureStore.deleteItemAsync('spotify_pkce_verifier');
   await SecureStore.deleteItemAsync('spotify_pkce_redirect_uri');
+}
+
+export async function getGrantedScopes(): Promise<string[] | null> {
+  const raw = await SecureStore.getItemAsync(SPOTIFY_CONFIG.storageKeys.grantedScope);
+  if (!raw) return null;
+  return raw
+    .split(/\s+/)
+    .map((scope) => scope.trim())
+    .filter(Boolean);
+}
+
+export async function hasRecentlyPlayedScope(): Promise<boolean> {
+  const scopes = await getGrantedScopes();
+  if (!scopes) return false;
+  return scopes.includes('user-read-recently-played');
 }
 

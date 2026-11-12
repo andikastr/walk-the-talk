@@ -83,9 +83,11 @@ export function createInitialCheckpoint({
     lastStepSyncTimestamp: now,
     distanceAtLastStepEvent: 0,
     fallbackBgStepsAdded: 0,
+    lastSyncedNativeSteps: 0,
     calibGpsMeters: 0,
     calibHwSteps: 0,
     weightKg,
+    soundtracks: [],
     lastSavedAt: now,
   };
 }
@@ -746,4 +748,85 @@ export function applyHardwareStepsToCheckpoint(
   };
 
   return { checkpoint, didAutoResume };
+}
+
+export function reconcileTotalHardwareStepsToCheckpoint(
+  inputCheckpoint: ActiveWorkoutCheckpoint,
+  totalNativeSteps: number,
+  now: number,
+  calibratedStrides?: Partial<Record<WorkoutType, number>>,
+  options?: {
+    isBackgroundReconcile?: boolean;
+    stepTimestampMs?: number;
+  }
+): {
+  checkpoint: ActiveWorkoutCheckpoint;
+  appliedStepDelta: number;
+  didAutoResume: boolean;
+} {
+  if (
+    inputCheckpoint.status !== 'recording' ||
+    !Number.isFinite(totalNativeSteps)
+  ) {
+    return {
+      checkpoint: inputCheckpoint,
+      appliedStepDelta: 0,
+      didAutoResume: false,
+    };
+  }
+
+  const normalizedTotal = Math.max(0, Math.round(totalNativeSteps));
+  const prevSynced = Math.max(0, inputCheckpoint.lastSyncedNativeSteps ?? 0);
+  const stepDelta = Math.max(0, normalizedTotal - prevSynced);
+
+  if (stepDelta <= 0) {
+    return {
+      checkpoint: inputCheckpoint,
+      appliedStepDelta: 0,
+      didAutoResume: false,
+    };
+  }
+
+  const hasValidNativeTs =
+    typeof options?.stepTimestampMs === 'number' &&
+    Number.isFinite(options.stepTimestampMs) &&
+    options.stepTimestampMs > 0;
+
+  const effectiveTimestamp = hasValidNativeTs
+    ? Math.max(
+        inputCheckpoint.lastMovementOrStepAt,
+        Math.min(now, options!.stepTimestampMs!)
+      )
+    : now;
+
+  const result = applyHardwareStepsToCheckpoint(
+    inputCheckpoint,
+    stepDelta,
+    effectiveTimestamp,
+    calibratedStrides,
+    {
+      isBackgroundReconcile:
+        Boolean(options?.isBackgroundReconcile) ||
+        inputCheckpoint.fallbackBgStepsAdded > 0,
+    }
+  );
+
+  // If auto-paused and stepDelta stayed below autoResumeMinSteps, preserve prevSynced
+  // so subsequent steps accumulate until autoResumeMinSteps is reached.
+  if (result.checkpoint === inputCheckpoint && !result.didAutoResume) {
+    return {
+      checkpoint: inputCheckpoint,
+      appliedStepDelta: 0,
+      didAutoResume: false,
+    };
+  }
+
+  return {
+    checkpoint: {
+      ...result.checkpoint,
+      lastSyncedNativeSteps: normalizedTotal,
+    },
+    appliedStepDelta: stepDelta,
+    didAutoResume: result.didAutoResume,
+  };
 }

@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   Modal,
   View,
@@ -11,10 +11,25 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ViewShot, { ViewShotRef } from 'react-native-view-shot';
 import * as Sharing from 'expo-sharing';
-import { Share2, Music, Layers, Sparkles, X } from 'lucide-react-native';
+import {
+  Share2,
+  Music,
+  Layers,
+  Sparkles,
+  X,
+  Square,
+  RectangleVertical,
+  Smartphone,
+} from 'lucide-react-native';
 import { WorkoutRecord } from '@/types/workout';
 import { formatDuration, formatPace, formatSteps } from '@/services/location/metrics';
-import { RouteSilhouette } from '@/components/workout/RouteSilhouette';
+import { normalizeWorkoutSoundtracks } from '@/services/spotify/workout-soundtrack';
+import { ShareRouteMap } from '@/components/workout/ShareRouteMap';
+import {
+  computeShareCardLayout,
+  ShareAspectRatio,
+  SharePreset,
+} from '@/components/workout/share-card-layout';
 import { IconCircleButton } from '@/components/ui/EditorialPrimitives';
 import { AppDialogOverlay, AppDialogTone } from '@/components/ui/AppDialogOverlay';
 import {
@@ -26,8 +41,6 @@ import {
 } from '@/constants/Colors';
 import { getActivityLabel } from '@/constants/i18n';
 import { usePreferences } from '@/context/AppPreferencesContext';
-
-type SharePreset = 'paper' | 'dark' | 'sticker';
 
 interface ShareWorkoutModalProps {
   visible: boolean;
@@ -42,10 +55,6 @@ interface InlineFeedbackState {
   message: string;
 }
 
-const CARD_WIDTH = 316;
-const ROUTE_WIDTH = 276;
-const ROUTE_HEIGHT = 148;
-
 export function ShareWorkoutModal({
   visible,
   workout,
@@ -55,7 +64,10 @@ export function ShareWorkoutModal({
   const insets = useSafeAreaInsets();
   const viewShotRef = useRef<ViewShotRef | null>(null);
   const [preset, setPreset] = useState<SharePreset>('paper');
+  const [aspectRatio, setAspectRatio] = useState<ShareAspectRatio>('portrait');
   const [isSharing, setIsSharing] = useState(false);
+  const tilesSettledRef = useRef(true);
+  const tileWaitersRef = useRef<(() => void)[]>([]);
   const [feedback, setFeedback] = useState<InlineFeedbackState>({
     visible: false,
     tone: 'error',
@@ -63,20 +75,49 @@ export function ShareWorkoutModal({
     message: '',
   });
 
+  const handleTilesSettledChange = useCallback((settled: boolean) => {
+    tilesSettledRef.current = settled;
+    if (settled && tileWaitersRef.current.length > 0) {
+      const waiters = tileWaitersRef.current.splice(0);
+      for (const resolve of waiters) {
+        resolve();
+      }
+    }
+  }, []);
+
+  const soundtracks = useMemo(
+    () => normalizeWorkoutSoundtracks(workout),
+    [workout]
+  );
+
+  const layout = useMemo(
+    () => computeShareCardLayout(aspectRatio, soundtracks.length),
+    [aspectRatio, soundtracks.length]
+  );
+
   const presets: { key: SharePreset; label: string }[] = [
     { key: 'paper', label: t.shareModal.presets.paper },
     { key: 'dark', label: t.shareModal.presets.dark },
     { key: 'sticker', label: t.shareModal.presets.sticker },
   ];
 
+  const ratioOptions: { key: ShareAspectRatio; label: string }[] = [
+    { key: 'square', label: t.shareModal.ratioSquare },
+    { key: 'portrait', label: t.shareModal.ratioPortrait },
+    { key: 'story', label: t.shareModal.ratioStory },
+  ];
+
   // Export card uses fixed editorial presets so Paper PNG is always warm paper and Dark PNG is always ink.
   const isCardDark = preset === 'dark';
   const isSticker = preset === 'sticker';
+  const mapTheme = isCardDark || isSticker ? 'dark' : 'light';
 
   const cardTextPrimary =
     isCardDark || isSticker ? LIGHT_PALETTE.onInverse : LIGHT_PALETTE.onSurface;
   const cardTextSecondary =
-    isCardDark || isSticker ? LIGHT_PALETTE.onInverseMuted : LIGHT_PALETTE.onSurfaceVariant;
+    isCardDark || isSticker
+      ? LIGHT_PALETTE.onInverseMuted
+      : LIGHT_PALETTE.onSurfaceVariant;
   const accentHero =
     isCardDark || isSticker ? LIGHT_PALETTE.primary : LIGHT_PALETTE.accent;
   const hairlineColor = isCardDark
@@ -98,6 +139,29 @@ export function ShareWorkoutModal({
     })
     .toUpperCase();
 
+  const metrics = [
+    {
+      label: t.shareModal.time,
+      value: formatDuration(workout.durationSeconds),
+      unit: '',
+    },
+    {
+      label: t.shareModal.avgPace,
+      value: formatPace(workout.avgPaceSecondsPerKm),
+      unit: '/km',
+    },
+    {
+      label: t.shareModal.steps,
+      value: formatSteps(workout.steps ?? 0),
+      unit: '',
+    },
+    {
+      label: t.shareModal.calories,
+      value: `${workout.caloriesKcal}`,
+      unit: t.common.kcalUnit,
+    },
+  ];
+
   const handleCaptureAndShare = async () => {
     if (isSharing) return;
     setIsSharing(true);
@@ -113,6 +177,22 @@ export function ShareWorkoutModal({
         });
         return;
       }
+
+      if (!tilesSettledRef.current) {
+        await Promise.race([
+          new Promise<void>((resolve) => {
+            tileWaitersRef.current.push(resolve);
+          }),
+          new Promise<void>((resolve) => {
+            setTimeout(resolve, 900);
+          }),
+        ]);
+      }
+
+      // Allow one frame commit before snapshotting ViewShot
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => resolve())
+      );
 
       const uri = await viewShotRef.current?.capture?.();
       if (!uri) {
@@ -191,7 +271,8 @@ export function ShareWorkoutModal({
                         ? palette.actionPrimary
                         : palette.modalSurfaceAlt,
                     },
-                    !active && isAppDark && { borderWidth: 1, borderColor: palette.border },
+                    !active &&
+                      isAppDark && { borderWidth: 1, borderColor: palette.border },
                   ]}
                 >
                   {item.key === 'sticker' ? (
@@ -211,7 +292,9 @@ export function ShareWorkoutModal({
                     style={[
                       styles.presetText,
                       {
-                        color: active ? palette.onActionPrimary : palette.onSurfaceVariant,
+                        color: active
+                          ? palette.onActionPrimary
+                          : palette.onSurfaceVariant,
                       },
                     ]}
                   >
@@ -222,161 +305,308 @@ export function ShareWorkoutModal({
             })}
           </View>
 
+          <View style={styles.ratioSection}>
+            <Text style={[styles.ratioSectionLabel, { color: palette.onSurfaceVariant }]}>
+              {t.shareModal.formatLabel}
+            </Text>
+            <View style={styles.ratioRow}>
+              {ratioOptions.map((item) => {
+                const active = aspectRatio === item.key;
+                const iconColor = active
+                  ? palette.onPrimary
+                  : palette.onSurfaceVariant;
+                return (
+                  <Pressable
+                    key={item.key}
+                    accessibilityRole="button"
+                    onPress={() => setAspectRatio(item.key)}
+                    style={[
+                      styles.ratioChip,
+                      {
+                        backgroundColor: active
+                          ? palette.primary
+                          : palette.modalSurfaceAlt,
+                      },
+                      !active &&
+                        isAppDark && { borderWidth: 1, borderColor: palette.border },
+                    ]}
+                  >
+                    {item.key === 'square' ? (
+                      <Square size={12} color={iconColor} strokeWidth={2.2} />
+                    ) : item.key === 'portrait' ? (
+                      <RectangleVertical size={12} color={iconColor} strokeWidth={2.2} />
+                    ) : (
+                      <Smartphone size={12} color={iconColor} strokeWidth={2.2} />
+                    )}
+                    <Text style={[styles.ratioChipText, { color: iconColor }]}>
+                      {item.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </View>
+
           <ScrollView
             showsVerticalScrollIndicator={false}
             contentContainerStyle={styles.previewScroll}
           >
-            {/* Preview studio backdrop khusus membantu melihat sticker transparan sebelum dishare */}
-            <View
-              style={[
-                styles.previewStage,
-                isSticker && styles.previewStageTransparentHint,
-              ]}
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.horizontalCenter}
             >
-              <ViewShot
-                ref={viewShotRef}
-                options={{ format: 'png', quality: 1, result: 'tmpfile' }}
-                style={styles.viewShotWrap}
+              {/* Preview studio backdrop khusus membantu melihat sticker transparan sebelum dishare */}
+              <View
+                style={[
+                  styles.previewStage,
+                  isSticker && styles.previewStageTransparentHint,
+                ]}
               >
-                <View
-                  collapsable={false}
-                  style={[
-                    styles.card,
-                    preset === 'paper' && styles.cardPaper,
-                    preset === 'dark' && styles.cardDark,
-                    preset === 'sticker' && styles.cardSticker,
-                  ]}
+                <ViewShot
+                  ref={viewShotRef}
+                  options={{ format: 'png', quality: 1, result: 'tmpfile' }}
+                  style={styles.viewShotWrap}
                 >
-                  <View style={styles.cardTopRow}>
-                    <View
-                      style={[
-                        styles.typeBadge,
-                        isCardDark || isSticker ? styles.typeBadgeLight : styles.typeBadgeDark,
-                      ]}
-                    >
-                      <Text
-                        style={[
-                          styles.typeBadgeText,
-                          isCardDark || isSticker
-                            ? styles.typeBadgeTextDark
-                            : styles.typeBadgeTextLight,
-                        ]}
-                      >
-                        {typeLabel}
-                      </Text>
-                    </View>
-                    <Text style={[styles.brandMark, { color: cardTextSecondary }]}>
-                      WALK THE TALK
-                    </Text>
-                  </View>
-
-                  <Text
-                    numberOfLines={2}
-                    style={[styles.workoutTitle, { color: cardTextPrimary }]}
-                  >
-                    {workout.title}
-                  </Text>
-                  <Text style={[styles.dateText, { color: cardTextSecondary }]}>
-                    {dateLabel}
-                  </Text>
-
                   <View
                     collapsable={false}
                     style={[
-                      styles.routeStage,
-                      preset === 'paper' && styles.routeStagePaper,
-                      preset === 'dark' && styles.routeStageDark,
+                      styles.card,
+                      {
+                        width: layout.width,
+                        height: layout.height,
+                        padding: layout.padding,
+                      },
+                      preset === 'paper' && styles.cardPaper,
+                      preset === 'dark' && styles.cardDark,
+                      preset === 'sticker' && styles.cardSticker,
                     ]}
                   >
-                    <RouteSilhouette
-                      routePoints={workout.routePoints}
-                      width={ROUTE_WIDTH}
-                      height={ROUTE_HEIGHT}
-                      strokeColor={routeStroke}
-                      strokeWidth={4}
-                      startDotColor={routeStart}
-                      endDotColor={routeEnd}
-                      fallbackColor={cardTextSecondary}
-                    />
-                  </View>
-
-                  <View style={styles.heroDistanceRow}>
-                    <Text style={[styles.heroDistanceVal, { color: accentHero }]}>
-                      {(workout.distanceMeters / 1000).toFixed(2)}
-                    </Text>
-                    <Text style={[styles.heroDistanceUnit, { color: cardTextSecondary }]}>
-                      {t.common.kmUnit.toUpperCase()}
-                    </Text>
-                  </View>
-
-                  <View
-                    style={[styles.hairline, { backgroundColor: hairlineColor }]}
-                  />
-
-                  <View style={styles.metricsGrid}>
-                    <View style={styles.metricCell}>
-                      <Text style={[styles.metricLabel, { color: cardTextSecondary }]}>
-                        {t.shareModal.time}
-                      </Text>
-                      <Text style={[styles.metricVal, { color: cardTextPrimary }]}>
-                        {formatDuration(workout.durationSeconds)}
-                      </Text>
-                    </View>
-                    <View style={styles.metricCell}>
-                      <Text style={[styles.metricLabel, { color: cardTextSecondary }]}>
-                        {t.shareModal.avgPace}
-                      </Text>
-                      <Text style={[styles.metricVal, { color: cardTextPrimary }]}>
-                        {formatPace(workout.avgPaceSecondsPerKm)}{' '}
-                        <Text style={[styles.metricUnit, { color: cardTextSecondary }]}>
-                          /km
+                    <View style={styles.cardHeaderBlock}>
+                      <View style={styles.cardTopRow}>
+                        <View
+                          style={[
+                            styles.typeBadge,
+                            isCardDark || isSticker
+                              ? styles.typeBadgeLight
+                              : styles.typeBadgeDark,
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.typeBadgeText,
+                              isCardDark || isSticker
+                                ? styles.typeBadgeTextDark
+                                : styles.typeBadgeTextLight,
+                            ]}
+                          >
+                            {typeLabel}
+                          </Text>
+                        </View>
+                        <Text style={[styles.brandMark, { color: cardTextSecondary }]}>
+                          WALK THE TALK
                         </Text>
-                      </Text>
-                    </View>
-                    <View style={styles.metricCell}>
-                      <Text style={[styles.metricLabel, { color: cardTextSecondary }]}>
-                        {t.shareModal.steps}
-                      </Text>
-                      <Text style={[styles.metricVal, { color: cardTextPrimary }]}>
-                        {formatSteps(workout.steps ?? 0)}
-                      </Text>
-                    </View>
-                    <View style={styles.metricCell}>
-                      <Text style={[styles.metricLabel, { color: cardTextSecondary }]}>
-                        {t.shareModal.calories}
-                      </Text>
-                      <Text style={[styles.metricVal, { color: cardTextPrimary }]}>
-                        {workout.caloriesKcal}{' '}
-                        <Text style={[styles.metricUnit, { color: cardTextSecondary }]}>
-                          {t.common.kcalUnit}
-                        </Text>
-                      </Text>
-                    </View>
-                  </View>
+                      </View>
 
-                  {workout.soundtrackTrackName ? (
+                      {layout.compactTitle ? (
+                        <View style={styles.compactTitleRow}>
+                          <Text
+                            numberOfLines={1}
+                            style={[
+                              styles.workoutTitleCompact,
+                              { color: cardTextPrimary },
+                            ]}
+                          >
+                            {workout.title}
+                          </Text>
+                          <Text style={[styles.dateTextInline, { color: cardTextSecondary }]}>
+                            {dateLabel}
+                          </Text>
+                        </View>
+                      ) : (
+                        <>
+                          <Text
+                            numberOfLines={2}
+                            style={[styles.workoutTitle, { color: cardTextPrimary }]}
+                          >
+                            {workout.title}
+                          </Text>
+                          <Text style={[styles.dateText, { color: cardTextSecondary }]}>
+                            {dateLabel}
+                          </Text>
+                        </>
+                      )}
+                    </View>
+
                     <View
+                      collapsable={false}
                       style={[
-                        styles.musicFooter,
-                        { borderTopColor: hairlineColor },
+                        styles.routeStage,
+                        {
+                          width: layout.mapWidth,
+                          height: layout.mapHeight,
+                        },
+                        preset === 'paper' && styles.routeStagePaper,
+                        preset === 'dark' && styles.routeStageDark,
+                        preset === 'sticker' && styles.routeStageSticker,
                       ]}
                     >
-                      <Music
-                        size={12}
-                        color={accentHero}
-                        strokeWidth={2}
+                      <ShareRouteMap
+                        routePoints={workout.routePoints}
+                        width={layout.mapWidth}
+                        height={layout.mapHeight}
+                        theme={mapTheme}
+                        strokeColor={routeStroke}
+                        strokeWidth={4}
+                        startDotColor={routeStart}
+                        endDotColor={routeEnd}
+                        fallbackColor={cardTextSecondary}
+                        onTilesSettledChange={handleTilesSettledChange}
                       />
-                      <Text
-                        numberOfLines={1}
-                        style={[styles.musicFooterText, { color: cardTextSecondary }]}
-                      >
-                        {workout.soundtrackTrackName} — {workout.soundtrackArtist}
-                      </Text>
                     </View>
-                  ) : null}
-                </View>
-              </ViewShot>
-            </View>
+
+                    <View style={styles.cardStatsBlock}>
+                      <View style={styles.heroDistanceRow}>
+                        <Text
+                          style={[
+                            layout.ratio === 'square'
+                              ? styles.heroDistanceValCompact
+                              : layout.ratio === 'story'
+                                ? styles.heroDistanceValStory
+                                : styles.heroDistanceVal,
+                            { color: accentHero },
+                          ]}
+                        >
+                          {(workout.distanceMeters / 1000).toFixed(2)}
+                        </Text>
+                        <Text
+                          style={[styles.heroDistanceUnit, { color: cardTextSecondary }]}
+                        >
+                          {t.common.kmUnit.toUpperCase()}
+                        </Text>
+                      </View>
+
+                      <View
+                        style={[
+                          styles.hairline,
+                          layout.ratio === 'square' && styles.hairlineCompact,
+                          { backgroundColor: hairlineColor },
+                        ]}
+                      />
+
+                      <View
+                        style={[
+                          styles.metricsGrid,
+                          layout.metricColumns === 4 && styles.metricsGridCompact,
+                        ]}
+                      >
+                        {metrics.map((metric) => (
+                          <View
+                            key={metric.label}
+                            style={
+                              layout.metricColumns === 4
+                                ? styles.metricCellQuarter
+                                : styles.metricCellHalf
+                            }
+                          >
+                            <Text
+                              style={[styles.metricLabel, { color: cardTextSecondary }]}
+                              numberOfLines={1}
+                            >
+                              {metric.label}
+                            </Text>
+                            <Text
+                              style={[
+                                layout.ratio === 'square'
+                                  ? styles.metricValCompact
+                                  : styles.metricVal,
+                                { color: cardTextPrimary },
+                              ]}
+                              numberOfLines={1}
+                            >
+                              {metric.value}
+                              {metric.unit ? (
+                                <Text
+                                  style={[
+                                    styles.metricUnit,
+                                    { color: cardTextSecondary },
+                                  ]}
+                                >
+                                  {' '}
+                                  {metric.unit}
+                                </Text>
+                              ) : null}
+                            </Text>
+                          </View>
+                        ))}
+                      </View>
+                    </View>
+
+                    {soundtracks.length > 0 ? (
+                      <View
+                        style={[
+                          styles.musicFooter,
+                          { borderTopColor: hairlineColor },
+                        ]}
+                      >
+                        <View style={styles.musicHeaderRow}>
+                          <Music size={11} color={accentHero} strokeWidth={2.2} />
+                          <Text
+                            style={[
+                              styles.musicHeaderLabel,
+                              { color: cardTextSecondary },
+                            ]}
+                          >
+                            {t.shareModal.soundtracksHeading(soundtracks.length)}
+                          </Text>
+                        </View>
+                        <View
+                          style={[
+                            styles.musicTrackGrid,
+                            layout.trackColumns === 2 && styles.musicTrackGridTwoCol,
+                          ]}
+                        >
+                          {soundtracks.map((track, idx) => (
+                            <View
+                              key={`${track.trackId ?? track.trackName}-${idx}`}
+                              style={
+                                layout.trackColumns === 2
+                                  ? styles.musicTrackCellHalf
+                                  : styles.musicTrackCellFull
+                              }
+                            >
+                              <Text
+                                style={[
+                                  styles.musicTrackIndex,
+                                  { color: accentHero },
+                                ]}
+                              >
+                                {String(idx + 1).padStart(2, '0')}
+                              </Text>
+                              <Text
+                                numberOfLines={1}
+                                style={[
+                                  styles.musicFooterText,
+                                  { color: cardTextPrimary },
+                                ]}
+                              >
+                                {track.trackName}
+                                {track.artist ? (
+                                  <Text style={{ color: cardTextSecondary }}>
+                                    {' '}
+                                    · {track.artist}
+                                  </Text>
+                                ) : null}
+                              </Text>
+                            </View>
+                          ))}
+                        </View>
+                      </View>
+                    ) : null}
+                  </View>
+                </ViewShot>
+              </View>
+            </ScrollView>
 
             {isSticker ? (
               <Text style={[styles.stickerHint, { color: palette.onSurfaceVariant }]}>
@@ -439,13 +669,13 @@ const styles = StyleSheet.create({
     borderCurve: 'continuous',
     paddingHorizontal: SPACING.gutter,
     paddingTop: SPACING.lg,
-    maxHeight: '92%',
+    maxHeight: '94%',
   },
   sheetHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: SPACING.md,
+    marginBottom: SPACING.sm,
   },
   kicker: {
     ...TYPOGRAPHY.labelUppercase,
@@ -457,22 +687,54 @@ const styles = StyleSheet.create({
   presetRow: {
     flexDirection: 'row',
     gap: SPACING.sm,
-    marginBottom: SPACING.md,
+    marginBottom: SPACING.sm,
   },
   presetChip: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    paddingVertical: 8,
-    paddingHorizontal: 14,
+    paddingVertical: 7,
+    paddingHorizontal: 13,
     borderRadius: RADIUS.full,
   },
   presetText: {
     ...TYPOGRAPHY.labelSm,
   },
+  ratioSection: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.sm,
+    marginBottom: SPACING.md,
+  },
+  ratioSectionLabel: {
+    ...TYPOGRAPHY.caption,
+  },
+  ratioRow: {
+    flex: 1,
+    flexDirection: 'row',
+    gap: 6,
+  },
+  ratioChip: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    paddingVertical: 6,
+    paddingHorizontal: 6,
+    borderRadius: RADIUS.full,
+  },
+  ratioChipText: {
+    ...TYPOGRAPHY.caption,
+    fontSize: 11,
+  },
   previewScroll: {
     alignItems: 'center',
-    paddingBottom: SPACING.lg,
+    paddingBottom: SPACING.md,
+  },
+  horizontalCenter: {
+    flexGrow: 1,
+    justifyContent: 'center',
   },
   previewStage: {
     borderRadius: RADIUS.lg,
@@ -488,10 +750,10 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
   },
   card: {
-    width: CARD_WIDTH,
     borderRadius: RADIUS.lg,
     borderCurve: 'continuous',
-    padding: SPACING.cardPadding,
+    justifyContent: 'space-between',
+    overflow: 'hidden',
   },
   cardPaper: {
     backgroundColor: LIGHT_PALETTE.surface,
@@ -504,15 +766,16 @@ const styles = StyleSheet.create({
   cardSticker: {
     backgroundColor: 'transparent',
   },
+  cardHeaderBlock: {},
   cardTopRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: SPACING.sm,
+    marginBottom: 6,
   },
   typeBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
+    paddingHorizontal: 9,
+    paddingVertical: 3,
     borderRadius: RADIUS.full,
   },
   typeBadgeDark: {
@@ -523,6 +786,7 @@ const styles = StyleSheet.create({
   },
   typeBadgeText: {
     ...TYPOGRAPHY.caption,
+    fontSize: 10,
   },
   typeBadgeTextLight: {
     color: LIGHT_PALETTE.onInverse,
@@ -532,25 +796,41 @@ const styles = StyleSheet.create({
   },
   brandMark: {
     ...TYPOGRAPHY.caption,
+    fontSize: 10,
+  },
+  compactTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginBottom: 6,
+  },
+  workoutTitleCompact: {
+    ...TYPOGRAPHY.headlineSm,
+    fontSize: 16,
+    lineHeight: 20,
+    flex: 1,
+  },
+  dateTextInline: {
+    ...TYPOGRAPHY.caption,
+    fontSize: 10,
   },
   workoutTitle: {
     ...TYPOGRAPHY.headlineSm,
-    fontSize: 20,
-    lineHeight: 24,
+    fontSize: 19,
+    lineHeight: 23,
   },
   dateText: {
     ...TYPOGRAPHY.caption,
-    marginTop: 3,
-    marginBottom: SPACING.md,
+    marginTop: 2,
+    marginBottom: 8,
   },
   routeStage: {
-    width: ROUTE_WIDTH,
-    height: ROUTE_HEIGHT,
     borderRadius: RADIUS.md,
     borderCurve: 'continuous',
+    overflow: 'hidden',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: SPACING.md,
   },
   routeStagePaper: {
     backgroundColor: LIGHT_PALETTE.surfaceAlt,
@@ -558,56 +838,127 @@ const styles = StyleSheet.create({
   routeStageDark: {
     backgroundColor: 'rgba(244, 242, 236, 0.05)',
   },
+  routeStageSticker: {
+    borderWidth: 1,
+    borderColor: 'rgba(244, 242, 236, 0.28)',
+  },
+  cardStatsBlock: {
+    marginTop: 8,
+  },
   heroDistanceRow: {
     flexDirection: 'row',
     alignItems: 'baseline',
-    gap: 6,
+    gap: 5,
   },
   heroDistanceVal: {
     ...TYPOGRAPHY.displayXl,
-    fontSize: 44,
-    lineHeight: 46,
-    letterSpacing: -1.6,
+    fontSize: 40,
+    lineHeight: 42,
+    letterSpacing: -1.4,
+  },
+  heroDistanceValCompact: {
+    ...TYPOGRAPHY.displayXl,
+    fontSize: 30,
+    lineHeight: 32,
+    letterSpacing: -1.1,
+  },
+  heroDistanceValStory: {
+    ...TYPOGRAPHY.displayXl,
+    fontSize: 46,
+    lineHeight: 48,
+    letterSpacing: -1.7,
   },
   heroDistanceUnit: {
     ...TYPOGRAPHY.headlineSm,
+    fontSize: 14,
   },
   hairline: {
     height: 1,
-    marginVertical: SPACING.md,
+    marginVertical: 8,
+  },
+  hairlineCompact: {
+    marginVertical: 6,
   },
   metricsGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    rowGap: SPACING.md,
+    rowGap: 8,
   },
-  metricCell: {
+  metricsGridCompact: {
+    rowGap: 0,
+  },
+  metricCellHalf: {
     width: '50%',
+  },
+  metricCellQuarter: {
+    width: '25%',
+    paddingRight: 4,
   },
   metricLabel: {
     ...TYPOGRAPHY.caption,
-    marginBottom: 2,
+    fontSize: 9.5,
+    marginBottom: 1,
   },
   metricVal: {
     ...TYPOGRAPHY.numeralSm,
-    fontSize: 16,
-    lineHeight: 20,
+    fontSize: 15,
+    lineHeight: 19,
+  },
+  metricValCompact: {
+    ...TYPOGRAPHY.numeralSm,
+    fontSize: 12.5,
+    lineHeight: 16,
   },
   metricUnit: {
     ...TYPOGRAPHY.caption,
+    fontSize: 10,
     textTransform: 'none',
     letterSpacing: 0,
   },
   musicFooter: {
+    borderTopWidth: 1,
+    paddingTop: 7,
+    marginTop: 8,
+    gap: 4,
+  },
+  musicHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    borderTopWidth: 1,
-    paddingTop: SPACING.sm,
-    marginTop: SPACING.md,
+    gap: 5,
+  },
+  musicHeaderLabel: {
+    ...TYPOGRAPHY.caption,
+    fontSize: 9.5,
+    letterSpacing: 0.7,
+  },
+  musicTrackGrid: {
+    gap: 3,
+  },
+  musicTrackGridTwoCol: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    rowGap: 4,
+  },
+  musicTrackCellFull: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  musicTrackCellHalf: {
+    width: '50%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingRight: 6,
+  },
+  musicTrackIndex: {
+    ...TYPOGRAPHY.numeralSm,
+    fontSize: 10,
   },
   musicFooterText: {
     ...TYPOGRAPHY.caption,
+    fontSize: 10.5,
+    lineHeight: 14,
     textTransform: 'none',
     letterSpacing: 0,
     flex: 1,

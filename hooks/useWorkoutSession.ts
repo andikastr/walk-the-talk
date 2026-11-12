@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { AppState, Platform } from 'react-native';
 import * as Location from 'expo-location';
-import { Pedometer } from 'expo-sensors';
+import * as WorkoutPedometer from '@/modules/workout-pedometer';
+import type { StepEventSubscription } from '@/modules/workout-pedometer';
 import {
   ActiveWorkoutCheckpoint,
   GpsSignalQuality,
@@ -9,6 +10,7 @@ import {
   StepTrackingMode,
   TrackingMode,
   WorkoutRecord,
+  WorkoutSoundtrackItem,
   WorkoutSplit,
   WorkoutStatus,
   WorkoutType,
@@ -30,13 +32,13 @@ import {
 } from '@/services/database/workout-repo';
 import {
   applyFallbackStepsToCheckpoint,
-  applyHardwareStepsToCheckpoint,
   applyManualPause,
   applyManualResume,
   createInitialCheckpoint,
   evaluateIdleAutoPause,
   getElapsedActiveSeconds,
   processGpsLocationSample,
+  reconcileTotalHardwareStepsToCheckpoint,
   resolveStrideMeters,
 } from '@/services/location/tracking-engine';
 import {
@@ -47,11 +49,62 @@ import {
 } from '@/services/location/background-task';
 import { getActivityLabel } from '@/constants/i18n';
 import { usePreferences } from '@/context/AppPreferencesContext';
+import {
+  appendUniqueSoundtrack,
+  getPrimarySoundtrack,
+  mergeWorkoutSoundtracks,
+  normalizeWorkoutSoundtracks,
+} from '@/services/spotify/workout-soundtrack';
 
 export type { StepTrackingMode };
 
 const IDLE_PREVIEW_MIN_MS = 3000;
 const IDLE_PREVIEW_MIN_METERS = 3;
+
+function getCheckpointSessionId(
+  checkpoint: Pick<ActiveWorkoutCheckpoint, 'startTime'>
+): string {
+  return `wtt-${checkpoint.startTime}`;
+}
+
+function reconcileSnapshotOntoRecordingCheckpoint(
+  checkpoint: ActiveWorkoutCheckpoint,
+  snapshot: WorkoutPedometer.PedometerSessionSnapshot | null,
+  strides: Partial<Record<WorkoutType, number>>,
+  now: number
+): ActiveWorkoutCheckpoint {
+  if (
+    checkpoint.status !== 'recording' ||
+    !snapshot ||
+    snapshot.sessionId !== getCheckpointSessionId(checkpoint) ||
+    snapshot.totalSteps <= (checkpoint.lastSyncedNativeSteps ?? 0)
+  ) {
+    return checkpoint;
+  }
+
+  const res = reconcileTotalHardwareStepsToCheckpoint(
+    checkpoint,
+    snapshot.totalSteps,
+    now,
+    strides,
+    {
+      isBackgroundReconcile: true,
+      stepTimestampMs: snapshot.lastStepTimestampMs,
+    }
+  );
+
+  if (res.appliedStepDelta <= 0) {
+    return checkpoint;
+  }
+
+  return {
+    ...res.checkpoint,
+    lastSavedAt: Math.max(
+      checkpoint.lastSavedAt,
+      Math.min(now, snapshot.lastStepTimestampMs || now)
+    ),
+  };
+}
 
 export function useWorkoutSession() {
   const { weightKg, autoPauseEnabled, palette, t } = usePreferences();
@@ -71,6 +124,8 @@ export function useWorkoutSession() {
   const [stepTrackingMode, setStepTrackingMode] = useState<StepTrackingMode>('fallback');
   const [routeCoordinates, setRouteCoordinates] = useState<GPSCoordinate[]>([]);
   const [splits, setSplits] = useState<WorkoutSplit[]>([]);
+  const [sessionSoundtracks, setSessionSoundtracks] = useState<WorkoutSoundtrackItem[]>([]);
+  const [workoutStartTime, setWorkoutStartTime] = useState<number | null>(null);
   const [currentLocation, setCurrentLocation] =
     useState<Location.LocationObjectCoords | null>(null);
   const [hasLocationPermission, setHasLocationPermission] = useState<boolean | null>(null);
@@ -99,13 +154,12 @@ export function useWorkoutSession() {
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const idleLocationSubRef = useRef<Location.LocationSubscription | null>(null);
   const activeLocationSubRef = useRef<Location.LocationSubscription | null>(null);
-  const pedometerSubRef = useRef<ReturnType<typeof Pedometer.watchStepCount> | null>(null);
+  const pedometerSubRef = useRef<StepEventSubscription | null>(null);
 
   const pedometerActiveRef = useRef<boolean>(false);
-  const lastSensorStepsRef = useRef<number>(0);
   const sensorReceivedEventRef = useRef<boolean>(false);
   const lastCheckpointSavedAtRef = useRef<number>(0);
-  const lastBgEnteredAtRef = useRef<number | null>(null);
+  const isReconcilingResumeRef = useRef<boolean>(false);
 
   // Sinkronkan preferensi terbaru ke refs dan ke checkpoint aktif bila ada
   useEffect(() => {
@@ -157,6 +211,8 @@ export function useWorkoutSession() {
       setElevationGainMeters(Math.round(cp.elevationGainMeters));
       setRouteCoordinates(cp.routePoints);
       setSplits(cp.splits);
+      setSessionSoundtracks(cp.soundtracks ?? []);
+      setWorkoutStartTime(cp.startTime);
     },
     []
   );
@@ -182,6 +238,7 @@ export function useWorkoutSession() {
 
   // Sinkronisasi durasi berbasis timestamp & evaluasi auto-pause tiap detik
   const syncWallClockMetrics = useCallback(() => {
+    if (isReconcilingResumeRef.current) return;
     const cp = checkpointRef.current;
     if (!cp || statusRef.current !== 'recording') return;
 
@@ -216,11 +273,12 @@ export function useWorkoutSession() {
     let active = true;
     (async () => {
       try {
-        const [strides, available, pedoPerm, savedCheckpoint] = await Promise.all([
+        const [strides, available, pedoPerm, savedCheckpoint, nativeSnap] = await Promise.all([
           getCalibratedStrides(),
-          Pedometer.isAvailableAsync().catch(() => false),
-          Pedometer.getPermissionsAsync().catch(() => null),
+          WorkoutPedometer.isAvailableAsync().catch(() => false),
+          WorkoutPedometer.getPermissionsAsync().catch(() => null),
           loadActiveCheckpoint().catch(() => null),
+          WorkoutPedometer.getSessionSnapshotAsync().catch(() => null),
         ]);
 
         if (!active) return;
@@ -228,17 +286,29 @@ export function useWorkoutSession() {
         setCalibratedStrides(strides);
         calibratedStridesRef.current = strides;
         setPedometerAvailable(available);
-        setHasPedometerPermission(pedoPerm ? pedoPerm.status === 'granted' : null);
+        setHasPedometerPermission(pedoPerm ? pedoPerm.granted : null);
+
+        const now = Date.now();
+        const hydratedCheckpoint = savedCheckpoint
+          ? reconcileSnapshotOntoRecordingCheckpoint(
+              savedCheckpoint,
+              nativeSnap,
+              strides,
+              now
+            )
+          : null;
 
         if (
-          savedCheckpoint &&
-          (savedCheckpoint.distanceMeters >= 5 ||
-            getElapsedActiveSeconds(savedCheckpoint) >= 5 ||
-            savedCheckpoint.routePoints.length > 1)
+          hydratedCheckpoint &&
+          (hydratedCheckpoint.distanceMeters >= 5 ||
+            getElapsedActiveSeconds(hydratedCheckpoint) >= 5 ||
+            hydratedCheckpoint.steps >= 10 ||
+            hydratedCheckpoint.routePoints.length > 1)
         ) {
-          setPendingRecovery(savedCheckpoint);
-        } else if (savedCheckpoint) {
+          setPendingRecovery(hydratedCheckpoint);
+        } else if (hydratedCheckpoint) {
           await clearActiveCheckpoint().catch(() => {});
+          await WorkoutPedometer.stopSessionAsync().catch(() => {});
         }
       } catch {
         // Ignore initialization errors cleanly
@@ -421,46 +491,63 @@ export function useWorkoutSession() {
     [applyCheckpointToUi, persistCheckpointIfDue]
   );
 
-  // Rekonsiliasi langkah iOS saat kembali dari background (`getStepCountAsync`)
-  const reconcileIosBackgroundSteps = useCallback(async () => {
-    if (Platform.OS !== 'ios') return;
-    const cp = checkpointRef.current;
-    const bgSince = lastBgEnteredAtRef.current;
-    lastBgEnteredAtRef.current = null;
+  const applyNativeStepTotal = useCallback(
+    (
+      sessionId: string | null,
+      totalSteps: number,
+      timestampMs: number,
+      isBackgroundReconcile: boolean
+    ) => {
+      const cp = checkpointRef.current;
+      if (!cp || statusRef.current !== 'recording') return;
+      if (sessionId && sessionId !== getCheckpointSessionId(cp)) return;
 
-    if (
-      !cp ||
-      statusRef.current !== 'recording' ||
-      cp.isAutoPaused ||
-      !pedometerActiveRef.current ||
-      !bgSince
-    ) {
+      const now = Date.now();
+      const res = reconcileTotalHardwareStepsToCheckpoint(
+        cp,
+        totalSteps,
+        now,
+        calibratedStridesRef.current,
+        {
+          isBackgroundReconcile,
+          stepTimestampMs: timestampMs,
+        }
+      );
+
+      if (res.appliedStepDelta > 0) {
+        checkpointRef.current = res.checkpoint;
+        sensorReceivedEventRef.current = true;
+        setStepTrackingMode('sensor');
+        applyCheckpointToUi(res.checkpoint, now);
+        void persistCheckpointIfDue(res.checkpoint, res.didAutoResume);
+      }
+    },
+    [applyCheckpointToUi, persistCheckpointIfDue]
+  );
+
+  // Rekonsiliasi total langkah native setelah app kembali dari background / layar mati
+  const syncNativePedometerSnapshot = useCallback(async () => {
+    if (!pedometerActiveRef.current || statusRef.current !== 'recording') {
+      syncWallClockMetrics();
       return;
     }
 
-    const now = Date.now();
-    if (now - bgSince < 2000) return;
-
+    isReconcilingResumeRef.current = true;
     try {
-      const res = await Pedometer.getStepCountAsync(new Date(bgSince), new Date(now));
-      const bgSteps = Math.max(0, res?.steps ?? 0);
-      if (bgSteps > 0 && checkpointRef.current && statusRef.current === 'recording') {
-        const updated = applyHardwareStepsToCheckpoint(
-          checkpointRef.current,
-          bgSteps,
-          now,
-          calibratedStridesRef.current,
-          { isBackgroundReconcile: true }
-        );
-        checkpointRef.current = updated.checkpoint;
-        sensorReceivedEventRef.current = true;
-        setStepTrackingMode('sensor');
-        applyCheckpointToUi(updated.checkpoint, now);
-      }
+      const snapshot = await WorkoutPedometer.getSessionSnapshotAsync();
+      applyNativeStepTotal(
+        snapshot.sessionId,
+        snapshot.totalSteps,
+        snapshot.lastStepTimestampMs,
+        true
+      );
     } catch {
-      // Abaikan jika getStepCountAsync tidak tersedia atau izin pedometer ditolak
+      // Abaikan jika modul native atau izin sensor tidak tersedia
+    } finally {
+      isReconcilingResumeRef.current = false;
+      syncWallClockMetrics();
     }
-  }, [applyCheckpointToUi]);
+  }, [applyNativeStepTotal, syncWallClockMetrics]);
 
   // Pantau status foreground/background untuk sinkronisasi timer, pedometer & recovery DB
   useEffect(() => {
@@ -469,19 +556,25 @@ export function useWorkoutSession() {
       appStateRef.current = nextState;
 
       if (nextState !== 'active' && prevState === 'active') {
-        lastBgEnteredAtRef.current = Date.now();
-        if (checkpointRef.current && (statusRef.current === 'recording' || statusRef.current === 'paused')) {
+        if (
+          checkpointRef.current &&
+          (statusRef.current === 'recording' || statusRef.current === 'paused')
+        ) {
           void persistCheckpointIfDue(checkpointRef.current, true);
         }
       }
 
       if (nextState === 'active') {
         void refreshLocationPermission(false);
-        void Pedometer.getPermissionsAsync()
-          .then((perm) => setHasPedometerPermission(perm.status === 'granted'))
+        void WorkoutPedometer.getPermissionsAsync()
+          .then((perm) => setHasPedometerPermission(perm.granted))
           .catch(() => {});
-        syncWallClockMetrics();
-        void reconcileIosBackgroundSteps();
+
+        if (statusRef.current === 'recording') {
+          void syncNativePedometerSnapshot();
+        } else {
+          syncWallClockMetrics();
+        }
       }
     });
 
@@ -490,8 +583,8 @@ export function useWorkoutSession() {
     };
   }, [
     persistCheckpointIfDue,
-    reconcileIosBackgroundSteps,
     refreshLocationPermission,
+    syncNativePedometerSnapshot,
     syncWallClockMetrics,
   ]);
 
@@ -537,13 +630,13 @@ export function useWorkoutSession() {
   }, []);
 
   const startOutdoorGpsTracking = useCallback(
-    async (activityType: WorkoutType) => {
+    async (activityType: WorkoutType): Promise<boolean> => {
       await stopOutdoorGpsTracking();
 
       const fgPerm = await Location.getForegroundPermissionsAsync();
       if (fgPerm.status !== 'granted') {
         setHasLocationPermission(false);
-        return;
+        return false;
       }
 
       const activityName = getActivityLabel(activityType, t);
@@ -560,7 +653,7 @@ export function useWorkoutSession() {
         Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.BestForNavigation })
           .then((loc) => handleLocationBatch([loc]))
           .catch(() => {});
-        return;
+        return true;
       }
 
       // Fallback mulus ke foreground watchPositionAsync jika izin background belum diberikan
@@ -573,12 +666,13 @@ export function useWorkoutSession() {
         },
         (loc) => handleLocationBatch([loc])
       );
+      return false;
     },
     [handleLocationBatch, palette.accent, stopOutdoorGpsTracking, t]
   );
 
-  // Hentikan / mulai pedometer hardware
-  const stopPedometerTracking = useCallback(() => {
+  // Lepaskan listener JS pedometer tanpa menghentikan foreground service native yang sedang aktif
+  const detachPedometerListener = useCallback(() => {
     if (pedometerSubRef.current) {
       pedometerSubRef.current.remove();
       pedometerSubRef.current = null;
@@ -586,72 +680,118 @@ export function useWorkoutSession() {
     pedometerActiveRef.current = false;
   }, []);
 
-  const startPedometerTracking = useCallback(async () => {
-    stopPedometerTracking();
-    lastSensorStepsRef.current = 0;
-    sensorReceivedEventRef.current = false;
+  const startPedometerTracking = useCallback(
+    async (options: {
+      sessionId: string;
+      trackingMode: TrackingMode;
+      activityType: WorkoutType;
+      useForegroundService: boolean;
+      initialSyncedSteps: number;
+      isResume: boolean;
+    }) => {
+      detachPedometerListener();
+      sensorReceivedEventRef.current = false;
 
-    try {
-      const available = await Pedometer.isAvailableAsync();
-      setPedometerAvailable(available);
-      if (!available) {
-        pedometerActiveRef.current = false;
-        setStepTrackingMode('fallback');
-        return;
-      }
-
-      const perm = await Pedometer.requestPermissionsAsync();
-      const granted = perm.status === 'granted';
-      setHasPedometerPermission(granted);
-
-      if (!granted) {
-        pedometerActiveRef.current = false;
-        setStepTrackingMode('fallback');
-        return;
-      }
-
-      if (statusRef.current !== 'recording' && statusRef.current !== 'paused') {
-        return;
-      }
-
-      pedometerActiveRef.current = true;
-      setStepTrackingMode('sensor');
-
-      pedometerSubRef.current = Pedometer.watchStepCount((result) => {
-        const currentRaw = Math.max(0, result.steps ?? 0);
-
-        if (statusRef.current !== 'recording') {
-          lastSensorStepsRef.current = currentRaw;
+      try {
+        const available = await WorkoutPedometer.isAvailableAsync();
+        setPedometerAvailable(available);
+        if (!available) {
+          pedometerActiveRef.current = false;
+          setStepTrackingMode('fallback');
           return;
         }
 
-        const delta = Math.max(0, currentRaw - lastSensorStepsRef.current);
-        lastSensorStepsRef.current = currentRaw;
+        const perm = await WorkoutPedometer.requestPermissionsAsync();
+        const granted = perm.granted;
+        setHasPedometerPermission(granted);
 
-        if (delta > 0 && checkpointRef.current) {
-          sensorReceivedEventRef.current = true;
-          const now = Date.now();
-          const res = applyHardwareStepsToCheckpoint(
-            checkpointRef.current,
-            delta,
-            now,
-            calibratedStridesRef.current
-          );
-          checkpointRef.current = res.checkpoint;
-          setStepTrackingMode('sensor');
-          applyCheckpointToUi(res.checkpoint, now);
+        if (!granted) {
+          pedometerActiveRef.current = false;
+          setStepTrackingMode('fallback');
+          return;
         }
-      });
-    } catch {
-      pedometerActiveRef.current = false;
-      setHasPedometerPermission(false);
-      setStepTrackingMode('fallback');
-    }
-  }, [applyCheckpointToUi, stopPedometerTracking]);
+
+        if (options.useForegroundService) {
+          await WorkoutPedometer.requestNotificationPermissionAsync().catch(() => null);
+        }
+
+        if (statusRef.current !== 'recording') {
+          return;
+        }
+
+        pedometerActiveRef.current = true;
+        setStepTrackingMode('sensor');
+
+        pedometerSubRef.current = WorkoutPedometer.addStepListener((event) => {
+          applyNativeStepTotal(
+            event.sessionId,
+            event.totalSteps,
+            event.timestampMs,
+            false
+          );
+        });
+
+        const activityName = getActivityLabel(options.activityType, t);
+        const notificationTitle =
+          options.trackingMode === 'indoor'
+            ? t.record.indoorFgServiceTitle(activityName)
+            : t.record.fgServiceTitle(activityName);
+        const notificationBody =
+          options.trackingMode === 'indoor'
+            ? t.record.indoorFgServiceBody
+            : t.record.fgServiceBody;
+        const strideMeters = resolveStrideMeters(
+          options.activityType,
+          calibratedStridesRef.current
+        );
+
+        let snapshot: WorkoutPedometer.PedometerSessionSnapshot | null = null;
+        if (options.isResume) {
+          const existingSnap = await WorkoutPedometer.getSessionSnapshotAsync().catch(() => null);
+          if (existingSnap && existingSnap.sessionId === options.sessionId) {
+            snapshot = await WorkoutPedometer.resumeSessionAsync({
+              trackingMode: options.trackingMode,
+              useForegroundService: options.useForegroundService,
+              notificationTitle,
+              notificationBody,
+              notificationColor: palette.accent,
+              strideMeters,
+            });
+          }
+        }
+
+        if (!snapshot) {
+          snapshot = await WorkoutPedometer.startSessionAsync({
+            sessionId: options.sessionId,
+            trackingMode: options.trackingMode,
+            useForegroundService: options.useForegroundService,
+            notificationTitle,
+            notificationBody,
+            notificationColor: palette.accent,
+            strideMeters,
+            initialSyncedSteps: options.initialSyncedSteps,
+            stepsLabel: t.hud.steps.toLowerCase(),
+          });
+        }
+
+        applyNativeStepTotal(
+          snapshot.sessionId,
+          snapshot.totalSteps,
+          snapshot.lastStepTimestampMs,
+          true
+        );
+      } catch {
+        pedometerActiveRef.current = false;
+        setHasPedometerPermission(false);
+        setStepTrackingMode('fallback');
+      }
+    },
+    [applyNativeStepTotal, detachPedometerListener, palette.accent, t]
+  );
 
   // Bersihkan seluruh listener saat unmount jika tidak sedang background tracking?
   // Catatan: saat sesi aktif dibiarkan hidup di Root Tab, stopForeground listeners tapi
-  // background task headless di TaskManager tetap hidup jika foreground service masih aktif!
+  // background task headless & native pedometer service tetap hidup jika foreground service aktif!
   useEffect(() => {
     return () => {
       registerForegroundLocationTaskListener(null);
@@ -713,7 +853,6 @@ export function useWorkoutSession() {
       statusRef.current = 'recording';
       trackingModeRef.current = activeMode;
       lastCheckpointSavedAtRef.current = now;
-      lastBgEnteredAtRef.current = null;
 
       setPendingRecovery(null);
       setStatus('recording');
@@ -722,11 +861,20 @@ export function useWorkoutSession() {
 
       void persistCheckpointIfDue(initialCheckpoint, true);
 
-      const tasks: Promise<unknown>[] = [startPedometerTracking()];
+      let startedBgGps = false;
       if (activeMode === 'outdoor') {
-        tasks.push(startOutdoorGpsTracking(type));
+        startedBgGps = await startOutdoorGpsTracking(type);
       }
-      await Promise.all(tasks);
+
+      await startPedometerTracking({
+        sessionId: getCheckpointSessionId(initialCheckpoint),
+        trackingMode: activeMode,
+        activityType: type,
+        // Aturan 1 notifikasi: outdoor dg GPS background memakai notifikasi GPS saja; indoor/tanpa-GPS memakai notifikasi health service
+        useForegroundService: activeMode === 'indoor' || !startedBgGps,
+        initialSyncedSteps: 0,
+        isResume: false,
+      });
     },
     [
       applyCheckpointToUi,
@@ -748,16 +896,33 @@ export function useWorkoutSession() {
     setStatus('paused');
     applyCheckpointToUi(pausedCp, now);
 
-    await Promise.all([
+    detachPedometerListener();
+
+    const [, pausedNative] = await Promise.all([
       stopOutdoorGpsTracking(),
-      Promise.resolve(stopPedometerTracking()),
-      persistCheckpointIfDue(pausedCp, true),
+      WorkoutPedometer.pauseSessionAsync().catch(() => null),
     ]);
+
+    const reconciledBeforePause = reconcileSnapshotOntoRecordingCheckpoint(
+      cp,
+      pausedNative,
+      calibratedStridesRef.current,
+      now
+    );
+
+    let finalPausedCp = pausedCp;
+    if (reconciledBeforePause !== cp) {
+      finalPausedCp = applyManualPause(reconciledBeforePause, now);
+      checkpointRef.current = finalPausedCp;
+      applyCheckpointToUi(finalPausedCp, now);
+    }
+
+    await persistCheckpointIfDue(finalPausedCp, true);
   }, [
     applyCheckpointToUi,
+    detachPedometerListener,
     persistCheckpointIfDue,
     stopOutdoorGpsTracking,
-    stopPedometerTracking,
   ]);
 
   // RESUME WORKOUT
@@ -774,11 +939,19 @@ export function useWorkoutSession() {
 
     void persistCheckpointIfDue(resumedCp, true);
 
-    const tasks: Promise<unknown>[] = [startPedometerTracking()];
+    let startedBgGps = false;
     if (resumedCp.trackingMode === 'outdoor') {
-      tasks.push(startOutdoorGpsTracking(resumedCp.type));
+      startedBgGps = await startOutdoorGpsTracking(resumedCp.type);
     }
-    await Promise.all(tasks);
+
+    await startPedometerTracking({
+      sessionId: getCheckpointSessionId(resumedCp),
+      trackingMode: resumedCp.trackingMode,
+      activityType: resumedCp.type,
+      useForegroundService: resumedCp.trackingMode === 'indoor' || !startedBgGps,
+      initialSyncedSteps: resumedCp.lastSyncedNativeSteps ?? resumedCp.steps,
+      isResume: true,
+    });
   }, [
     applyCheckpointToUi,
     persistCheckpointIfDue,
@@ -790,40 +963,58 @@ export function useWorkoutSession() {
   const stopWorkout = useCallback(async () => {
     const cp = checkpointRef.current;
     const now = Date.now();
+    let baseCp = cp;
     if (cp) {
       const frozenCp = applyManualPause(cp, now);
       checkpointRef.current = frozenCp;
       applyCheckpointToUi(frozenCp, now);
-      void persistCalibratedStrideIfReady(frozenCp);
     }
 
     statusRef.current = 'completed';
     setStatus('completed');
     setIsAutoPaused(false);
+    detachPedometerListener();
+
+    const [, pausedNative] = await Promise.all([
+      stopOutdoorGpsTracking(),
+      WorkoutPedometer.pauseSessionAsync().catch(() => null),
+    ]);
+
+    if (baseCp) {
+      baseCp = reconcileSnapshotOntoRecordingCheckpoint(
+        baseCp,
+        pausedNative,
+        calibratedStridesRef.current,
+        now
+      );
+      const finalFrozenCp = applyManualPause(baseCp, now);
+      checkpointRef.current = finalFrozenCp;
+      applyCheckpointToUi(finalFrozenCp, now);
+      void persistCalibratedStrideIfReady(finalFrozenCp);
+    }
 
     await Promise.all([
-      stopOutdoorGpsTracking(),
-      Promise.resolve(stopPedometerTracking()),
+      WorkoutPedometer.stopSessionAsync().catch(() => null),
       clearActiveCheckpoint().catch(() => {}),
     ]);
   }, [
     applyCheckpointToUi,
+    detachPedometerListener,
     persistCalibratedStrideIfReady,
     stopOutdoorGpsTracking,
-    stopPedometerTracking,
   ]);
 
   // RESET WORKOUT
   const resetWorkout = useCallback(async () => {
     statusRef.current = 'idle';
     checkpointRef.current = null;
-    lastSensorStepsRef.current = 0;
     sensorReceivedEventRef.current = false;
-    lastBgEnteredAtRef.current = null;
+    isReconcilingResumeRef.current = false;
+    detachPedometerListener();
 
     await Promise.all([
       stopOutdoorGpsTracking(),
-      Promise.resolve(stopPedometerTracking()),
+      WorkoutPedometer.stopSessionAsync().catch(() => null),
       clearActiveCheckpoint().catch(() => {}),
     ]);
 
@@ -840,7 +1031,9 @@ export function useWorkoutSession() {
     setStepTrackingMode('fallback');
     setRouteCoordinates([]);
     setSplits([]);
-  }, [stopOutdoorGpsTracking, stopPedometerTracking]);
+    setSessionSoundtracks([]);
+    setWorkoutStartTime(null);
+  }, [detachPedometerListener, stopOutdoorGpsTracking]);
 
   // RESTORE CRASH RECOVERY CHECKPOINT
   const restorePendingWorkout = useCallback(async () => {
@@ -848,18 +1041,34 @@ export function useWorkoutSession() {
     if (!saved) return;
 
     const now = Date.now();
+    let baseSaved = saved;
+
+    try {
+      const nativeSnap = await WorkoutPedometer.getSessionSnapshotAsync();
+      baseSaved = reconcileSnapshotOntoRecordingCheckpoint(
+        saved,
+        nativeSnap,
+        calibratedStridesRef.current,
+        now
+      );
+      await WorkoutPedometer.pauseSessionAsync().catch(() => null);
+    } catch {
+      // Ignore native recovery sync errors cleanly
+    }
+
     // Jika sebelumnya status recording saat crash, potong ke lastSavedAt atau resume bersih sebagai paused
     // agar durasi offline selama app mati tidak membengkak palsu!
     const recoveredPaused: ActiveWorkoutCheckpoint = {
-      ...saved,
+      ...baseSaved,
       status: 'paused',
       isAutoPaused: false,
-      accumulatedActiveMs: getElapsedActiveSeconds(saved, saved.lastSavedAt || now) * 1000,
+      accumulatedActiveMs:
+        getElapsedActiveSeconds(baseSaved, baseSaved.lastSavedAt || now) * 1000,
       activeSegmentStartMs: null,
       smoothedCurrentPaceSeconds: 0,
       lastAnchoredPoint: null,
       recentPoints: [],
-      currentSegmentIndex: saved.currentSegmentIndex + 1,
+      currentSegmentIndex: baseSaved.currentSegmentIndex + 1,
     };
 
     checkpointRef.current = recoveredPaused;
@@ -872,17 +1081,71 @@ export function useWorkoutSession() {
 
   const dismissPendingWorkout = useCallback(async () => {
     setPendingRecovery(null);
-    await clearActiveCheckpoint().catch(() => {});
+    await Promise.all([
+      WorkoutPedometer.stopSessionAsync().catch(() => null),
+      clearActiveCheckpoint().catch(() => {}),
+    ]);
   }, []);
+
+  const recordPlayedTrack = useCallback(
+    (item: WorkoutSoundtrackItem | null | undefined) => {
+      const cp = checkpointRef.current;
+      if (!cp || statusRef.current !== 'recording') return;
+
+      const existing = cp.soundtracks ?? [];
+      const next = appendUniqueSoundtrack(existing, item);
+      if (next === existing) return;
+
+      const updatedCp: ActiveWorkoutCheckpoint = {
+        ...cp,
+        soundtracks: next,
+      };
+      checkpointRef.current = updatedCp;
+      setSessionSoundtracks(next);
+      void persistCheckpointIfDue(updatedCp, true);
+    },
+    [persistCheckpointIfDue]
+  );
+
+  const mergeSessionSoundtracks = useCallback(
+    (recentlyPlayed: WorkoutSoundtrackItem[], endMs?: number): WorkoutSoundtrackItem[] => {
+      const cp = checkpointRef.current;
+      if (!cp) return sessionSoundtracks;
+
+      const merged = mergeWorkoutSoundtracks(cp.soundtracks ?? [], recentlyPlayed, {
+        startMs: cp.startTime,
+        endMs: endMs ?? Date.now(),
+      });
+      checkpointRef.current = {
+        ...cp,
+        soundtracks: merged,
+      };
+      setSessionSoundtracks(merged);
+      return merged;
+    },
+    [sessionSoundtracks]
+  );
 
   // SAVE TO DATABASE
   const saveCurrentWorkout = useCallback(
     async (
       title: string,
-      soundtrack?: { trackName: string; artist: string }
+      soundtrack?:
+        | { trackName: string; artist: string }
+        | WorkoutSoundtrackItem[]
     ): Promise<WorkoutRecord> => {
       const cp = checkpointRef.current;
       const now = Date.now();
+      const baseSoundtracks = cp?.soundtracks ?? sessionSoundtracks;
+      const resolvedSoundtracks = Array.isArray(soundtrack)
+        ? mergeWorkoutSoundtracks(baseSoundtracks, soundtrack, {
+            startMs: cp?.startTime,
+            endMs: now,
+          })
+        : soundtrack
+        ? appendUniqueSoundtrack(baseSoundtracks, soundtrack)
+        : normalizeWorkoutSoundtracks({ soundtracks: baseSoundtracks });
+      const primarySoundtrack = getPrimarySoundtrack(resolvedSoundtracks);
       const finalDuration = cp ? getElapsedActiveSeconds(cp, now) : durationSeconds;
       const finalDistance = cp ? cp.distanceMeters : distanceMeters;
       const finalSteps = cp ? cp.steps : steps;
@@ -916,8 +1179,11 @@ export function useWorkoutSession() {
         caloriesKcal: finalCalories,
         routePoints: cp?.routePoints ?? routeCoordinates,
         splits: cp?.splits ?? splits,
-        soundtrackTrackName: soundtrack?.trackName,
-        soundtrackArtist: soundtrack?.artist,
+        soundtrackTrackName: primarySoundtrack?.trackName,
+        soundtrackArtist: primarySoundtrack?.artist,
+        ...(resolvedSoundtracks.length > 0
+          ? { soundtracks: resolvedSoundtracks }
+          : {}),
         steps: finalSteps,
         avgCadenceSpm: calculateCadenceSpm(finalSteps, finalDuration),
         elevationGainMeters: Math.round(cp?.elevationGainMeters ?? elevationGainMeters),
@@ -934,6 +1200,7 @@ export function useWorkoutSession() {
       elevationGainMeters,
       resetWorkout,
       routeCoordinates,
+      sessionSoundtracks,
       splits,
       steps,
       workoutType,
@@ -966,6 +1233,8 @@ export function useWorkoutSession() {
     stepTrackingMode,
     routeCoordinates,
     splits,
+    sessionSoundtracks,
+    workoutStartTime,
     currentLocation,
     gpsSignal,
     gpsAccuracyMeters,
@@ -978,6 +1247,8 @@ export function useWorkoutSession() {
     setTrackingMode,
     refreshLocationPermission,
     requestBackgroundLocationPermission,
+    recordPlayedTrack,
+    mergeSessionSoundtracks,
     startWorkout,
     pauseWorkout,
     resumeWorkout,

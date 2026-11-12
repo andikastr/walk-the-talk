@@ -3,10 +3,15 @@ import {
   ActiveWorkoutCheckpoint,
   GPSCoordinate,
   WorkoutRecord,
+  WorkoutSoundtrackItem,
   WorkoutStats,
   WorkoutType,
 } from '@/types/workout';
 import { WORKOUT_CONFIG } from '@/constants/Config';
+import {
+  getPrimarySoundtrack,
+  normalizeWorkoutSoundtracks,
+} from '@/services/spotify/workout-soundtrack';
 
 const ACTIVE_CHECKPOINT_SETTING_KEY = 'active_workout_checkpoint_v1';
 const CALIBRATED_STRIDES_SETTING_KEY = 'calibrated_strides_v1';
@@ -19,6 +24,10 @@ const WORKOUT_POINT_PLACEHOLDER = '(?, ?, ?, ?, ?, ?, ?, ?)';
 const WORKOUT_SPLIT_INSERT_PREFIX =
   'INSERT INTO workout_splits (workout_id, km_number, duration_seconds, pace_seconds, elevation_gain_meters) VALUES ';
 const WORKOUT_SPLIT_PLACEHOLDER = '(?, ?, ?, ?, ?)';
+
+const WORKOUT_SOUNDTRACK_INSERT_PREFIX =
+  'INSERT INTO workout_soundtracks (workout_id, position, track_id, track_name, artist, played_at) VALUES ';
+const WORKOUT_SOUNDTRACK_PLACEHOLDER = '(?, ?, ?, ?, ?, ?)';
 
 const ACTIVE_CP_POINT_INSERT_PREFIX =
   'INSERT INTO active_checkpoint_points (session_start_time, latitude, longitude, altitude, accuracy, speed, timestamp, segment_index) VALUES ';
@@ -78,6 +87,53 @@ function mapWorkoutSummaryRow(row: any): WorkoutSummary {
     ...rest,
     isIndoor: Boolean(isIndoorRaw),
   };
+}
+
+function mapSoundtrackRow(row: any): WorkoutSoundtrackItem {
+  return {
+    ...(row.trackId ? { trackId: String(row.trackId) } : {}),
+    trackName: String(row.trackName ?? ''),
+    artist: String(row.artist ?? 'Unknown'),
+    ...(typeof row.playedAt === 'number' && Number.isFinite(row.playedAt)
+      ? { playedAt: row.playedAt }
+      : {}),
+  };
+}
+
+async function attachSoundtracksToSummaries(
+  db: SQLite.SQLiteDatabase,
+  summaries: WorkoutSummary[]
+): Promise<WorkoutSummary[]> {
+  if (summaries.length === 0) return [];
+
+  const grouped = new Map<string, WorkoutSoundtrackItem[]>();
+  const ids = summaries.map((s) => s.id);
+
+  for (let offset = 0; offset < ids.length; offset += BATCH_CHUNK_SIZE) {
+    const chunk = ids.slice(offset, offset + BATCH_CHUNK_SIZE);
+    const placeholders = new Array(chunk.length).fill('?').join(', ');
+    const rows = await db.getAllAsync<any>(
+      `SELECT workout_id as workoutId, track_id as trackId, track_name as trackName, artist, played_at as playedAt
+       FROM workout_soundtracks
+       WHERE workout_id IN (${placeholders})
+       ORDER BY workout_id ASC, position ASC;`,
+      chunk
+    );
+    for (const row of rows) {
+      const list = grouped.get(row.workoutId) ?? [];
+      list.push(mapSoundtrackRow(row));
+      grouped.set(row.workoutId, list);
+    }
+  }
+
+  return summaries.map((summary) => {
+    const resolved = normalizeWorkoutSoundtracks({
+      soundtracks: grouped.get(summary.id),
+      soundtrackTrackName: summary.soundtrackTrackName,
+      soundtrackArtist: summary.soundtrackArtist,
+    });
+    return resolved.length > 0 ? { ...summary, soundtracks: resolved } : summary;
+  });
 }
 
 function bindGpsPointRow(
@@ -178,6 +234,17 @@ async function initDatabase(db: SQLite.SQLiteDatabase): Promise<void> {
       FOREIGN KEY (workout_id) REFERENCES workouts (id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS workout_soundtracks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      workout_id TEXT NOT NULL,
+      position INTEGER NOT NULL,
+      track_id TEXT,
+      track_name TEXT NOT NULL,
+      artist TEXT NOT NULL,
+      played_at INTEGER,
+      FOREIGN KEY (workout_id) REFERENCES workouts (id) ON DELETE CASCADE
+    );
+
     CREATE TABLE IF NOT EXISTS active_checkpoint_points (
       seq INTEGER PRIMARY KEY AUTOINCREMENT,
       session_start_time INTEGER NOT NULL,
@@ -197,6 +264,7 @@ async function initDatabase(db: SQLite.SQLiteDatabase): Promise<void> {
 
     CREATE INDEX IF NOT EXISTS idx_points_workout ON workout_points (workout_id);
     CREATE INDEX IF NOT EXISTS idx_splits_workout ON workout_splits (workout_id);
+    CREATE INDEX IF NOT EXISTS idx_soundtracks_workout ON workout_soundtracks (workout_id, position);
     CREATE INDEX IF NOT EXISTS idx_active_cp_session ON active_checkpoint_points (session_start_time, seq);
     CREATE INDEX IF NOT EXISTS idx_workouts_start_time ON workouts (start_time DESC, id DESC);
     CREATE INDEX IF NOT EXISTS idx_workouts_type_start ON workouts (type, start_time DESC, id DESC);
@@ -225,6 +293,8 @@ async function initDatabase(db: SQLite.SQLiteDatabase): Promise<void> {
 export async function saveWorkout(workout: WorkoutRecord): Promise<void> {
   return enqueueDbWrite(async () => {
     const db = await getDatabase();
+    const normalizedSoundtracks = normalizeWorkoutSoundtracks(workout);
+    const primarySoundtrack = getPrimarySoundtrack(normalizedSoundtracks);
 
     await db.withTransactionAsync(async () => {
       await db.runAsync(
@@ -240,8 +310,8 @@ export async function saveWorkout(workout: WorkoutRecord): Promise<void> {
           workout.distanceMeters,
           workout.avgPaceSecondsPerKm,
           workout.caloriesKcal,
-          workout.soundtrackTrackName || null,
-          workout.soundtrackArtist || null,
+          primarySoundtrack?.trackName || null,
+          primarySoundtrack?.artist || null,
           workout.steps ?? 0,
           workout.avgCadenceSpm ?? 0,
           Math.round(workout.elevationGainMeters ?? 0),
@@ -272,6 +342,22 @@ export async function saveWorkout(workout: WorkoutRecord): Promise<void> {
           Math.round(split.elevationGainMeters ?? 0),
         ]
       );
+
+      await insertRowsInChunks(
+        db,
+        WORKOUT_SOUNDTRACK_INSERT_PREFIX,
+        WORKOUT_SOUNDTRACK_PLACEHOLDER,
+        BATCH_CHUNK_SIZE,
+        normalizedSoundtracks.map((track, position) => ({ track, position })),
+        ({ track, position }) => [
+          workout.id,
+          position,
+          track.trackId ?? null,
+          track.trackName,
+          track.artist,
+          track.playedAt ?? null,
+        ]
+      );
     });
   });
 }
@@ -285,7 +371,7 @@ export async function getAllWorkouts(): Promise<WorkoutSummary[]> {
     `SELECT ${WORKOUT_SUMMARY_SELECT_COLUMNS}
      FROM workouts ORDER BY start_time DESC, id DESC;`
   );
-  return rows.map(mapWorkoutSummaryRow);
+  return attachSoundtracksToSummaries(db, rows.map(mapWorkoutSummaryRow));
 }
 
 /**
@@ -299,7 +385,7 @@ export async function getRecentWorkouts(limit: number = 5): Promise<WorkoutSumma
      FROM workouts ORDER BY start_time DESC, id DESC LIMIT ?;`,
     [safeLimit]
   );
-  return rows.map(mapWorkoutSummaryRow);
+  return attachSoundtracksToSummaries(db, rows.map(mapWorkoutSummaryRow));
 }
 
 /**
@@ -334,7 +420,7 @@ export async function getWorkoutsPage(options?: {
 
   const hasMore = rows.length > safeLimit;
   const pageRows = hasMore ? rows.slice(0, safeLimit) : rows;
-  const items = pageRows.map(mapWorkoutSummaryRow);
+  const items = await attachSoundtracksToSummaries(db, pageRows.map(mapWorkoutSummaryRow));
   const lastItem = items[items.length - 1];
 
   return {
@@ -432,8 +518,22 @@ export async function getWorkoutById(id: string): Promise<WorkoutRecord | null> 
     [id]
   );
 
+  const soundtrackRows = await db.getAllAsync<any>(
+    `SELECT track_id as trackId, track_name as trackName, artist, played_at as playedAt
+     FROM workout_soundtracks WHERE workout_id = ? ORDER BY position ASC;`,
+    [id]
+  );
+
+  const summary = mapWorkoutSummaryRow(workoutRow);
+  const soundtracks = normalizeWorkoutSoundtracks({
+    soundtracks: soundtrackRows.map(mapSoundtrackRow),
+    soundtrackTrackName: summary.soundtrackTrackName,
+    soundtrackArtist: summary.soundtrackArtist,
+  });
+
   return {
-    ...mapWorkoutSummaryRow(workoutRow),
+    ...summary,
+    ...(soundtracks.length > 0 ? { soundtracks } : {}),
     routePoints: points,
     splits: splits,
   };

@@ -25,6 +25,13 @@ export interface WorkoutSplit {
   elevationGainMeters?: number;
 }
 
+export interface WorkoutSoundtrackItem {
+  trackId?: string;
+  trackName: string;
+  artist: string;
+  playedAt?: number;
+}
+
 export interface WorkoutRecord {
   id: string;
   type: WorkoutType;
@@ -39,6 +46,7 @@ export interface WorkoutRecord {
   splits: WorkoutSplit[];
   soundtrackTrackName?: string;
   soundtrackArtist?: string;
+  soundtracks?: WorkoutSoundtrackItem[];
   steps?: number;
   avgCadenceSpm?: number;
   elevationGainMeters?: number;
@@ -81,9 +89,11 @@ export interface ActiveWorkoutCheckpoint {
   lastStepSyncTimestamp: number;
   distanceAtLastStepEvent: number;
   fallbackBgStepsAdded: number;
+  lastSyncedNativeSteps?: number;
   calibGpsMeters: number;
   calibHwSteps: number;
   weightKg: number;
+  soundtracks?: WorkoutSoundtrackItem[];
   lastSavedAt: number;
 }
 

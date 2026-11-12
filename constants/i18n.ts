@@ -127,7 +127,8 @@ const idDict = {
     indoorCardKicker: 'MODE TREADMILL / INDOOR',
     indoorCardHeading: 'Pelacakan Langkah Tanpa GPS',
     indoorCardStride: (cm: number) => `Panjang langkah aktif: ${cm} cm`,
-    indoorCardSensorHint: 'Menggunakan pedometer perangkat untuk menghitung jarak & pace.',
+    indoorCardSensorHint:
+      'Menggunakan pedometer latar belakang untuk menghitung jarak & pace meski layar terkunci.',
     indoorUnavailableHint: 'Sensor pedometer tidak tersedia di perangkat ini.',
     bgLocationKicker: 'PELACAKAN LATAR BELAKANG',
     bgLocationTitle: 'Rekam Saat Layar Mati?',
@@ -137,6 +138,8 @@ const idDict = {
     bgLocationSkip: 'Saat Pakai Saja',
     fgServiceTitle: (activity: string) => `Walk The Talk · ${activity}`,
     fgServiceBody: 'Sedang melacak rute, jarak, dan pace secara aktif.',
+    indoorFgServiceTitle: (activity: string) => `Walk The Talk · ${activity} (Indoor)`,
+    indoorFgServiceBody: 'Sedang menghitung langkah & pace secara aktif di latar belakang.',
     recoveryKicker: 'PEMULIHAN SESI',
     recoveryTitle: 'Lanjutkan Sesi Terakhir?',
     recoveryMessage: (activity: string, distKm: string, durationStr: string) =>
@@ -168,6 +171,7 @@ const idDict = {
     indoorBadge: 'INDOOR',
     shareCta: 'Bagikan Aktivitas',
     soundtrackKicker: 'SOUNDTRACK LARI',
+    soundtracksTitle: (count: number) => `${count} Lagu Diputar`,
     splitsKicker: 'RINGKASAN PACE',
     splitsHeading: 'Splits Per Kilometer',
   },
@@ -212,6 +216,8 @@ const idDict = {
     avgPace: 'AVG PACE',
     steps: 'LANGKAH',
     soundtrackPrefix: 'Soundtrack',
+    soundtrackCountLabel: (count: number) => `Soundtrack Sesi (${count} lagu)`,
+    syncingSoundtrack: 'Menyinkronkan riwayat lagu Spotify...',
     discardBtn: 'Buang',
     saveBtn: 'Simpan Aktivitas',
     discardTitle: 'Buang Aktivitas?',
@@ -222,6 +228,10 @@ const idDict = {
     kicker: 'SOCIAL EXPORT · PNG',
     title: 'Bagikan Aktivitas',
     closeA11y: 'Tutup jendela bagikan',
+    formatLabel: 'UKURAN KARTU',
+    ratioSquare: '1:1 Kotak',
+    ratioPortrait: '3:4 Post',
+    ratioStory: '9:16 Story',
     presets: {
       paper: 'Paper',
       dark: 'Dark Ink',
@@ -231,6 +241,7 @@ const idDict = {
     avgPace: 'AVG PACE',
     steps: 'LANGKAH',
     calories: 'KALORI',
+    soundtracksHeading: (count: number) => `SOUNDTRACK (${count} LAGU)`,
     stickerHint: 'Diekspor sebagai PNG transparan — siap ditempel di IG Story atau TikTok.',
     shareNow: 'Bagikan Sekarang',
     preparingPng: 'Menyiapkan PNG...',
@@ -244,6 +255,10 @@ const idDict = {
   },
   music: {
     unauthKicker: 'AUDIO PENDAMPING LARI',
+    reconnectScopeTitle: 'Izin Riwayat Lagu Diperlukan',
+    reconnectScopeMessage:
+      'Hubungkan ulang akun Spotify agar seluruh lagu yang diputar saat layar mati ikut tercatat di sesi workout.',
+    reconnectScopeBtn: 'Hubungkan Ulang',
     unauthTitle: 'Koneksikan Spotify',
     unauthSubtitle:
       'Dengarkan playlist favorit langsung dari HUD lari tanpa berpindah aplikasi saat berolahraga.',
@@ -494,7 +509,8 @@ const enDict: typeof idDict = {
     indoorCardKicker: 'INDOOR / TREADMILL MODE',
     indoorCardHeading: 'GPS-Free Step Tracking',
     indoorCardStride: (cm: number) => `Active stride length: ${cm} cm`,
-    indoorCardSensorHint: 'Uses your motion sensor to calculate distance & pace.',
+    indoorCardSensorHint:
+      'Uses background pedometer tracking to calculate distance & pace even with the screen off.',
     indoorUnavailableHint: 'Pedometer sensor is unavailable on this device.',
     bgLocationKicker: 'BACKGROUND TRACKING',
     bgLocationTitle: 'Keep Tracking With Screen Off?',
@@ -504,6 +520,8 @@ const enDict: typeof idDict = {
     bgLocationSkip: 'While Using Only',
     fgServiceTitle: (activity: string) => `Walk The Talk · ${activity}`,
     fgServiceBody: 'Actively tracking your route, distance, and pace.',
+    indoorFgServiceTitle: (activity: string) => `Walk The Talk · ${activity} (Indoor)`,
+    indoorFgServiceBody: 'Actively counting steps & pace in the background.',
     recoveryKicker: 'SESSION RECOVERY',
     recoveryTitle: 'Resume Interrupted Session?',
     recoveryMessage: (activity: string, distKm: string, durationStr: string) =>
@@ -535,6 +553,7 @@ const enDict: typeof idDict = {
     indoorBadge: 'INDOOR',
     shareCta: 'Share Activity',
     soundtrackKicker: 'RUN SOUNDTRACK',
+    soundtracksTitle: (count: number) => `${count} Tracks Played`,
     splitsKicker: 'PACE SUMMARY',
     splitsHeading: 'Splits Per Kilometer',
   },
@@ -579,6 +598,8 @@ const enDict: typeof idDict = {
     avgPace: 'AVG PACE',
     steps: 'STEPS',
     soundtrackPrefix: 'Soundtrack',
+    soundtrackCountLabel: (count: number) => `Session Soundtrack (${count} tracks)`,
+    syncingSoundtrack: 'Syncing Spotify track history...',
     discardBtn: 'Discard',
     saveBtn: 'Save Activity',
     discardTitle: 'Discard Activity?',
@@ -589,6 +610,10 @@ const enDict: typeof idDict = {
     kicker: 'SOCIAL EXPORT · PNG',
     title: 'Share Activity',
     closeA11y: 'Close share sheet',
+    formatLabel: 'CARD FORMAT',
+    ratioSquare: '1:1 Square',
+    ratioPortrait: '3:4 Post',
+    ratioStory: '9:16 Story',
     presets: {
       paper: 'Paper',
       dark: 'Dark Ink',
@@ -598,6 +623,7 @@ const enDict: typeof idDict = {
     avgPace: 'AVG PACE',
     steps: 'STEPS',
     calories: 'CALORIES',
+    soundtracksHeading: (count: number) => `SOUNDTRACK (${count} TRACKS)`,
     stickerHint: 'Exported as a transparent PNG — ready to layer on IG Story or TikTok.',
     shareNow: 'Share Now',
     preparingPng: 'Preparing PNG...',
@@ -611,6 +637,10 @@ const enDict: typeof idDict = {
   },
   music: {
     unauthKicker: 'RUNNING AUDIO COMPANION',
+    reconnectScopeTitle: 'Track History Scope Needed',
+    reconnectScopeMessage:
+      'Reconnect Spotify so tracks played while your screen is off are captured in your workout log.',
+    reconnectScopeBtn: 'Reconnect Spotify',
     unauthTitle: 'Connect Spotify',
     unauthSubtitle:
       'Listen to your favorite playlists straight from the workout HUD without leaving the app.',
