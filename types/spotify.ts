@@ -44,10 +44,26 @@ export interface SpotifyTrack {
   name: string;
   duration_ms: number;
   uri: string;
+  type?: 'track';
   is_playable?: boolean;
   artists: SpotifyArtist[];
   album: SpotifyAlbum;
 }
+
+export interface SpotifyEpisode {
+  id: string;
+  name: string;
+  duration_ms: number;
+  uri: string;
+  type?: 'episode';
+  images?: SpotifyImage[];
+  show?: {
+    id?: string;
+    name: string;
+  };
+}
+
+export type SpotifyPlayableItem = SpotifyTrack | SpotifyEpisode;
 
 export interface SpotifyDevice {
   id: string | null;
@@ -67,7 +83,8 @@ export interface SpotifyPlaybackState {
   timestamp: number;
   progress_ms: number | null;
   is_playing: boolean;
-  item: SpotifyTrack | null;
+  currently_playing_type?: 'track' | 'episode' | 'ad' | 'unknown';
+  item: SpotifyPlayableItem | null;
 }
 
 export interface SpotifyPlaylist {

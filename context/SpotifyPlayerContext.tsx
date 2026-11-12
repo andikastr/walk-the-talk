@@ -14,17 +14,22 @@ import {
   getPlaybackState,
   nextTrack,
   pauseMusic,
-  playMusic,
+  pickPreferredDevice,
+  playWithDeviceRecovery,
   previousTrack,
   transferPlayback,
 } from '@/services/spotify/player';
-import { SpotifyDevice, SpotifyPlaybackState, SpotifyTrack } from '@/types/spotify';
+import {
+  SpotifyDevice,
+  SpotifyPlayableItem,
+  SpotifyPlaybackState,
+} from '@/types/spotify';
 import { getActiveLanguage, getTranslations } from '@/constants/i18n';
 import { useSpotifyAuth } from '@/hooks/useSpotifyAuth';
 
 interface SpotifyPlayerContextValue {
   playbackState: SpotifyPlaybackState | null;
-  currentTrack: SpotifyTrack | null;
+  currentTrack: SpotifyPlayableItem | null;
   isPlaying: boolean;
   activeDevice: SpotifyDevice | null;
   devices: SpotifyDevice[];
@@ -45,6 +50,7 @@ const SpotifyPlayerContext = createContext<SpotifyPlayerContextValue | null>(nul
 const ACTIVE_POLL_INTERVAL_MS = 3000;
 const IDLE_POLL_INTERVAL_MS = 8000;
 const PLAYBACK_FETCH_COOLDOWN_MS = 1200;
+const ERROR_AUTO_DISMISS_MS = 5000;
 const EMPTY_DEVICES: SpotifyDevice[] = [];
 
 export function SpotifyPlayerProvider({
@@ -60,6 +66,7 @@ export function SpotifyPlayerProvider({
 
   const pollingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const actionRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const errorDismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isMountedRef = useRef<boolean>(true);
   const isAuthenticatedRef = useRef<boolean>(isAuthenticated);
   const isPlayingRef = useRef<boolean>(false);
@@ -70,6 +77,27 @@ export function SpotifyPlayerProvider({
   const playbackFetchInFlightRef = useRef<Promise<void> | null>(null);
   const lastPlaybackFetchAtRef = useRef<number>(0);
   const scheduleNextPollRef = useRef<() => void>(() => {});
+
+  const clearBannerError = useCallback(() => {
+    if (errorDismissTimerRef.current) {
+      clearTimeout(errorDismissTimerRef.current);
+      errorDismissTimerRef.current = null;
+    }
+    setErrorMessage(null);
+  }, []);
+
+  const showBannerError = useCallback((message: string) => {
+    if (errorDismissTimerRef.current) {
+      clearTimeout(errorDismissTimerRef.current);
+    }
+    setErrorMessage(message);
+    errorDismissTimerRef.current = setTimeout(() => {
+      if (isMountedRef.current) {
+        setErrorMessage(null);
+      }
+      errorDismissTimerRef.current = null;
+    }, ERROR_AUTO_DISMISS_MS);
+  }, []);
 
   const stopPolling = useCallback(() => {
     if (pollingTimerRef.current) {
@@ -95,13 +123,13 @@ export function SpotifyPlayerProvider({
           playbackStateRef.current = state;
           isPlayingRef.current = Boolean(state?.is_playing);
           setPlaybackState(state);
-          setErrorMessage(null);
+          clearBannerError();
         }
       } catch (err: any) {
         if (isMountedRef.current && isAuthenticatedRef.current) {
           // Jangan tampilkan error berulang jika hanya 404 (tidak ada active device)
           if (err.status !== 404) {
-            setErrorMessage(err.message);
+            showBannerError(err.message);
           }
         }
       } finally {
@@ -111,7 +139,7 @@ export function SpotifyPlayerProvider({
 
     playbackFetchInFlightRef.current = request;
     return request;
-  }, []);
+  }, [clearBannerError, showBannerError]);
 
   const forceRefreshPlayback = useCallback(() => fetchPlayback(true), [fetchPlayback]);
 
@@ -222,7 +250,7 @@ export function SpotifyPlayerProvider({
       const clearTimer = setTimeout(() => {
         setPlaybackState(null);
         setDevices(EMPTY_DEVICES);
-        setErrorMessage(null);
+        clearBannerError();
       }, 0);
       return () => {
         clearTimeout(clearTimer);
@@ -231,6 +259,10 @@ export function SpotifyPlayerProvider({
         if (actionRefreshTimerRef.current) {
           clearTimeout(actionRefreshTimerRef.current);
           actionRefreshTimerRef.current = null;
+        }
+        if (errorDismissTimerRef.current) {
+          clearTimeout(errorDismissTimerRef.current);
+          errorDismissTimerRef.current = null;
         }
       };
     }
@@ -274,13 +306,17 @@ export function SpotifyPlayerProvider({
         clearTimeout(actionRefreshTimerRef.current);
         actionRefreshTimerRef.current = null;
       }
+      if (errorDismissTimerRef.current) {
+        clearTimeout(errorDismissTimerRef.current);
+        errorDismissTimerRef.current = null;
+      }
     };
-  }, [fetchPlayback, isAuthenticated, scheduleNextPoll, stopPolling]);
+  }, [clearBannerError, fetchPlayback, isAuthenticated, scheduleNextPoll, stopPolling]);
 
   const handleTogglePlay = useCallback(async () => {
     try {
       setIsLoading(true);
-      setErrorMessage(null);
+      clearBannerError();
       const current = playbackStateRef.current;
       if (current?.is_playing) {
         await pauseMusic();
@@ -291,23 +327,19 @@ export function SpotifyPlayerProvider({
           return next;
         });
       } else {
-        let targetDeviceId = current?.device?.id;
+        let targetDeviceId = current?.device?.id ?? undefined;
         if (!targetDeviceId) {
           const cachedDevices = devicesRef.current;
           const devList =
             cachedDevices.length > 0 ? cachedDevices : await fetchDevices();
-          const target =
-            devList.find((d) => d.is_active) ||
-            devList.find((d) => d.type === 'Smartphone') ||
-            devList[0];
-          targetDeviceId = target?.id;
+          targetDeviceId = pickPreferredDevice(devList)?.id ?? undefined;
         }
 
-        if (targetDeviceId) {
-          await playMusic({ deviceId: targetDeviceId });
-        } else {
-          await playMusic();
-        }
+        await playWithDeviceRecovery({
+          deviceId: targetDeviceId,
+          refreshDevices: fetchDevices,
+        });
+
         isPlayingRef.current = true;
         setPlaybackState((prev) => {
           const next = prev ? { ...prev, is_playing: true } : null;
@@ -318,27 +350,31 @@ export function SpotifyPlayerProvider({
       scheduleDelayedPlaybackRefresh(600);
     } catch (err: any) {
       const errors = getTranslations(getActiveLanguage()).spotifyErrors;
-      if (err.message?.includes('404') || err.message?.includes('NO_ACTIVE_DEVICE')) {
-        setErrorMessage(errors.noActiveDeviceInline);
+      if (
+        err?.status === 404 ||
+        err.message?.includes('404') ||
+        err.message?.includes('NO_ACTIVE_DEVICE')
+      ) {
+        showBannerError(errors.noActiveDeviceInline);
         void fetchDevices();
       } else {
-        setErrorMessage(err.message || errors.togglePlayFailed);
+        showBannerError(err.message || errors.togglePlayFailed);
       }
     } finally {
       if (isMountedRef.current) {
         setIsLoading(false);
       }
     }
-  }, [fetchDevices, scheduleDelayedPlaybackRefresh]);
+  }, [clearBannerError, fetchDevices, scheduleDelayedPlaybackRefresh, showBannerError]);
 
   const handleNext = useCallback(async () => {
     try {
       setIsLoading(true);
-      setErrorMessage(null);
+      clearBannerError();
       await nextTrack();
       scheduleDelayedPlaybackRefresh(800);
     } catch (err: any) {
-      setErrorMessage(
+      showBannerError(
         err.message || getTranslations(getActiveLanguage()).spotifyErrors.nextFailed
       );
     } finally {
@@ -346,16 +382,16 @@ export function SpotifyPlayerProvider({
         setIsLoading(false);
       }
     }
-  }, [scheduleDelayedPlaybackRefresh]);
+  }, [clearBannerError, scheduleDelayedPlaybackRefresh, showBannerError]);
 
   const handlePrevious = useCallback(async () => {
     try {
       setIsLoading(true);
-      setErrorMessage(null);
+      clearBannerError();
       await previousTrack();
       scheduleDelayedPlaybackRefresh(800);
     } catch (err: any) {
-      setErrorMessage(
+      showBannerError(
         err.message || getTranslations(getActiveLanguage()).spotifyErrors.prevFailed
       );
     } finally {
@@ -363,13 +399,13 @@ export function SpotifyPlayerProvider({
         setIsLoading(false);
       }
     }
-  }, [scheduleDelayedPlaybackRefresh]);
+  }, [clearBannerError, scheduleDelayedPlaybackRefresh, showBannerError]);
 
   const handleSelectDevice = useCallback(
     async (deviceId: string) => {
       try {
         setIsLoading(true);
-        setErrorMessage(null);
+        clearBannerError();
         await transferPlayback(deviceId, true);
         if (actionRefreshTimerRef.current) {
           clearTimeout(actionRefreshTimerRef.current);
@@ -385,7 +421,7 @@ export function SpotifyPlayerProvider({
           }
         }, 1000);
       } catch (err: any) {
-        setErrorMessage(
+        showBannerError(
           err.message || getTranslations(getActiveLanguage()).spotifyErrors.transferFailed
         );
       } finally {
@@ -394,7 +430,7 @@ export function SpotifyPlayerProvider({
         }
       }
     },
-    [fetchDevices, fetchPlayback]
+    [clearBannerError, fetchDevices, fetchPlayback, showBannerError]
   );
 
   const wakeUpSpotify = useCallback(async (): Promise<boolean> => {

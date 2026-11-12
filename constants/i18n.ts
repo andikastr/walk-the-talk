@@ -382,6 +382,8 @@ const idDict = {
     noAuthCode: 'Tidak ada authorization code yang diterima dari Spotify.',
     verifierMismatch:
       'Kode verifier PKCE tidak cocok dengan sesi aktif. Silakan tekan tombol "Masuk dengan Spotify" sekali lagi dan salin link yang paling baru.',
+    stateMismatch:
+      'Validasi keamanan login Spotify (state) tidak cocok. Silakan coba login ulang.',
     authCodeExpired:
       'Kode otorisasi sudah kedaluwarsa atau sudah pernah dipakai sebelumnya (kode Spotify hanya valid 1x). Silakan mulai login baru.',
     redirectMismatch: (uri: string) =>
@@ -400,6 +402,7 @@ const idDict = {
     noDeviceAvailable:
       'Tidak ada perangkat aktif Spotify. Silakan buka aplikasi Spotify di HP Anda terlebih dahulu.',
     networkError: 'Terjadi kesalahan jaringan.',
+    requestTimeout: 'Koneksi ke Spotify habis waktu. Periksa sinyal internet Anda.',
   },
 };
 
@@ -769,6 +772,8 @@ const enDict: typeof idDict = {
     noAuthCode: 'No authorization code received from Spotify.',
     verifierMismatch:
       'PKCE verifier does not match the active session. Tap "Continue with Spotify" once and copy the newest link.',
+    stateMismatch:
+      'Spotify login security validation (state) did not match. Please try signing in again.',
     authCodeExpired:
       'Authorization code has expired or was already used (Spotify codes work once). Please start a fresh login.',
     redirectMismatch: (uri: string) =>
@@ -787,6 +792,7 @@ const enDict: typeof idDict = {
     noDeviceAvailable:
       'No active Spotify device found. Open the Spotify app on your phone first.',
     networkError: 'A network error occurred.',
+    requestTimeout: 'Request to Spotify timed out. Check your internet connection.',
   },
 };
 

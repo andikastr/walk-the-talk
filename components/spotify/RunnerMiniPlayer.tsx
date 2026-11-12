@@ -21,6 +21,7 @@ import { useSpotifyAuth } from '@/hooks/useSpotifyAuth';
 import { useSpotifyPlayer } from '@/hooks/useSpotifyPlayer';
 import { FONT_FAMILY, RADIUS, SPACING, TYPOGRAPHY } from '@/constants/Colors';
 import { usePreferences } from '@/context/AppPreferencesContext';
+import { resolveSpotifyMediaMeta } from '@/services/spotify/player';
 import { SpotifyAttribution } from './SpotifyAttribution';
 import { DevicePickerModal } from './DevicePickerModal';
 
@@ -171,8 +172,9 @@ export function RunnerMiniPlayer() {
     );
   }
 
-  const albumImageUrl = currentTrack.album?.images?.[0]?.url;
-  const artistNames = currentTrack.artists?.map((a) => a.name).join(', ') || 'Unknown Artist';
+  const mediaMeta = resolveSpotifyMediaMeta(currentTrack, 'Unknown Artist');
+  const albumImageUrl = mediaMeta.artworkUrl;
+  const artistNames = mediaMeta.subtitle;
 
   return (
     <View style={cardSurfaceStyle}>

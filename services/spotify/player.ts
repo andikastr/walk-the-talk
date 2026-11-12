@@ -2,12 +2,64 @@ import { spotifyFetch } from './client';
 import { toWorkoutSoundtrackItem } from './workout-soundtrack';
 import {
   SpotifyPlaybackState,
+  SpotifyPlayableItem,
   SpotifyDevice,
   SpotifyUser,
   SpotifyPlaylist,
   SpotifyTrack,
+  SpotifyEpisode,
 } from '@/types/spotify';
 import type { WorkoutSoundtrackItem } from '@/types/workout';
+
+function withDeviceId(endpoint: string, deviceId?: string): string {
+  if (!deviceId) return endpoint;
+  return `${endpoint}?device_id=${encodeURIComponent(deviceId)}`;
+}
+
+/**
+ * Selects the best available Spotify Connect playback target (active first, then smartphone, then first).
+ */
+export function pickPreferredDevice(devices: SpotifyDevice[]): SpotifyDevice | null {
+  if (!devices || devices.length === 0) return null;
+  return (
+    devices.find((d) => d.is_active) ||
+    devices.find((d) => d.type === 'Smartphone') ||
+    devices[0] ||
+    null
+  );
+}
+
+/**
+ * Normalizes display metadata for both music tracks and podcast episodes.
+ */
+export function resolveSpotifyMediaMeta(
+  item: SpotifyPlayableItem | null | undefined,
+  fallbackSubtitle: string = ''
+): { title: string; subtitle: string; artworkUrl?: string } {
+  if (!item) {
+    return { title: '', subtitle: fallbackSubtitle };
+  }
+
+  const maybeTrack = item as Partial<SpotifyTrack>;
+  if (Array.isArray(maybeTrack.artists) && maybeTrack.artists.length > 0) {
+    const artists = maybeTrack.artists
+      .map((a) => a?.name?.trim())
+      .filter(Boolean)
+      .join(', ');
+    return {
+      title: item.name,
+      subtitle: artists || fallbackSubtitle,
+      artworkUrl: maybeTrack.album?.images?.[0]?.url,
+    };
+  }
+
+  const maybeEpisode = item as Partial<SpotifyEpisode>;
+  return {
+    title: item.name,
+    subtitle: maybeEpisode.show?.name?.trim() || fallbackSubtitle,
+    artworkUrl: maybeEpisode.images?.[0]?.url,
+  };
+}
 
 /**
  * Mengambil profil pengguna yang sedang login
@@ -18,12 +70,14 @@ export async function getCurrentUser(): Promise<SpotifyUser> {
 }
 
 /**
- * Mengambil status pemutaran musik saat ini
- * Endpoint: GET /v1/me/player
+ * Mengambil status pemutaran musik saat ini (termasuk track dan episode podcast)
+ * Endpoint: GET /v1/me/player?additional_types=track,episode
  */
 export async function getPlaybackState(): Promise<SpotifyPlaybackState | null> {
   try {
-    const res = await spotifyFetch<SpotifyPlaybackState>('/me/player');
+    const res = await spotifyFetch<SpotifyPlaybackState>(
+      '/me/player?additional_types=track,episode'
+    );
     // Jika tidak ada konten atau tidak ada item/device, kembalikan null
     if (!res || !res.device) return null;
     return res;
@@ -65,10 +119,7 @@ export async function playMusic(params?: {
   contextUri?: string;
   uris?: string[];
 }): Promise<void> {
-  let endpoint = '/me/player/play';
-  if (params?.deviceId) {
-    endpoint += `?device_id=${params.deviceId}`;
-  }
+  const endpoint = withDeviceId('/me/player/play', params?.deviceId);
 
   const body: Record<string, any> = {};
   if (params?.contextUri) {
@@ -83,17 +134,47 @@ export async function playMusic(params?: {
   });
 }
 
+export async function playWithDeviceRecovery(params: {
+  deviceId?: string;
+  contextUri?: string;
+  uris?: string[];
+  refreshDevices: () => Promise<SpotifyDevice[]>;
+}): Promise<void> {
+  try {
+    await playMusic({
+      deviceId: params.deviceId,
+      contextUri: params.contextUri,
+      uris: params.uris,
+    });
+  } catch (err: any) {
+    const isMissingDevice =
+      err?.status === 404 ||
+      err?.message?.includes('404') ||
+      err?.message?.includes('NO_ACTIVE_DEVICE');
+    if (!isMissingDevice || !params.deviceId) {
+      throw err;
+    }
+
+    const freshDevices = await params.refreshDevices();
+    const fallbackDeviceId = pickPreferredDevice(freshDevices)?.id ?? undefined;
+    if (!fallbackDeviceId || fallbackDeviceId === params.deviceId) {
+      throw err;
+    }
+
+    await playMusic({
+      deviceId: fallbackDeviceId,
+      contextUri: params.contextUri,
+      uris: params.uris,
+    });
+  }
+}
+
 /**
  * Menjeda pemutaran musik
  * Endpoint: PUT /v1/me/player/pause
  */
 export async function pauseMusic(deviceId?: string): Promise<void> {
-  let endpoint = '/me/player/pause';
-  if (deviceId) {
-    endpoint += `?device_id=${deviceId}`;
-  }
-
-  await spotifyFetch<void>(endpoint, {
+  await spotifyFetch<void>(withDeviceId('/me/player/pause', deviceId), {
     method: 'PUT',
   });
 }
@@ -103,12 +184,7 @@ export async function pauseMusic(deviceId?: string): Promise<void> {
  * Endpoint: POST /v1/me/player/next
  */
 export async function nextTrack(deviceId?: string): Promise<void> {
-  let endpoint = '/me/player/next';
-  if (deviceId) {
-    endpoint += `?device_id=${deviceId}`;
-  }
-
-  await spotifyFetch<void>(endpoint, {
+  await spotifyFetch<void>(withDeviceId('/me/player/next', deviceId), {
     method: 'POST',
   });
 }
@@ -118,12 +194,7 @@ export async function nextTrack(deviceId?: string): Promise<void> {
  * Endpoint: POST /v1/me/player/previous
  */
 export async function previousTrack(deviceId?: string): Promise<void> {
-  let endpoint = '/me/player/previous';
-  if (deviceId) {
-    endpoint += `?device_id=${deviceId}`;
-  }
-
-  await spotifyFetch<void>(endpoint, {
+  await spotifyFetch<void>(withDeviceId('/me/player/previous', deviceId), {
     method: 'POST',
   });
 }
@@ -142,10 +213,12 @@ export async function getUserPlaylists(limit: number = 20): Promise<SpotifyPlayl
  * Endpoint: GET /v1/playlists/{playlist_id}/items (BUKAN /tracks yang sudah deprecated)
  */
 export async function getPlaylistItems(playlistId: string, limit: number = 20): Promise<SpotifyTrack[]> {
-  const res = await spotifyFetch<{ items: { track: SpotifyTrack | null }[] }>(
-    `/playlists/${playlistId}/items?limit=${limit}`
-  );
-  return (res.items || []).map((item) => item.track).filter((t): t is SpotifyTrack => t !== null);
+  const res = await spotifyFetch<{
+    items: { track?: SpotifyTrack | null; item?: SpotifyTrack | null }[];
+  }>(`/playlists/${encodeURIComponent(playlistId)}/items?limit=${limit}`);
+  return (res.items || [])
+    .map((entry) => entry.item ?? entry.track ?? null)
+    .filter((t): t is SpotifyTrack => t !== null && Array.isArray(t.artists));
 }
 
 interface RecentlyPlayedItemPayload {

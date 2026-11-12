@@ -17,15 +17,23 @@ jest.mock('@/hooks/useSpotifyAuth', () => ({
   }),
 }));
 
-jest.mock('@/services/spotify/player', () => ({
-  getPlaybackState: jest.fn(),
-  getAvailableDevices: jest.fn(),
-  playMusic: jest.fn(),
-  pauseMusic: jest.fn(),
-  nextTrack: jest.fn(),
-  previousTrack: jest.fn(),
-  transferPlayback: jest.fn(),
-}));
+jest.mock('@/services/spotify/player', () => {
+  const actual = jest.requireActual('@/services/spotify/player') as Record<
+    string,
+    unknown
+  >;
+  return {
+    ...actual,
+    getPlaybackState: jest.fn(),
+    getAvailableDevices: jest.fn(),
+    playMusic: jest.fn(),
+    playWithDeviceRecovery: jest.fn(),
+    pauseMusic: jest.fn(),
+    nextTrack: jest.fn(),
+    previousTrack: jest.fn(),
+    transferPlayback: jest.fn(),
+  };
+});
 
 jest.mock('expo-linking', () => ({
   canOpenURL: jest.fn(async () => true),
@@ -213,5 +221,34 @@ describe('context/SpotifyPlayerContext (O4)', () => {
       resolvePlayback({ is_playing: false, device: null, item: null, progress_ms: 0 });
       await Promise.all([p1, p2]);
     });
+  });
+
+  it('auto-dismisses transient player errors after 5 seconds', async () => {
+    const nextMock = SpotifyPlayerService.nextTrack as jest.MockedFunction<
+      typeof SpotifyPlayerService.nextTrack
+    >;
+    nextMock.mockRejectedValueOnce(new Error('Temporary playback error'));
+
+    let capturedCtx!: ReturnType<typeof useSpotifyPlayerContext>;
+    await render(
+      <SpotifyPlayerProvider>
+        <TestConsumer
+          focusActive={false}
+          onContextReady={(ctx) => {
+            capturedCtx = ctx;
+          }}
+        />
+      </SpotifyPlayerProvider>
+    );
+
+    await act(async () => {
+      await capturedCtx.next();
+    });
+    expect(capturedCtx.errorMessage).toBe('Temporary playback error');
+
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(5000);
+    });
+    expect(capturedCtx.errorMessage).toBeNull();
   });
 });

@@ -1,6 +1,7 @@
 import { SPOTIFY_CONFIG } from '@/constants/Config';
 import { getActiveLanguage, getTranslations } from '@/constants/i18n';
 import { getValidAccessToken, refreshAccessToken } from './auth';
+import { fetchWithTimeout, isFetchTimeoutError } from './http';
 import { SpotifyApiErrorResponse } from '@/types/spotify';
 
 const MAX_RETRIES = 3;
@@ -21,6 +22,14 @@ export class SpotifyApiError extends Error {
  * Delay helper untuk exponential backoff
  */
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function tryParseJson(rawText: string): { ok: true; value: unknown } | { ok: false } {
+  try {
+    return { ok: true, value: JSON.parse(rawText) };
+  } catch {
+    return { ok: false };
+  }
+}
 
 /**
  * Specialized Fetch Client untuk Spotify Web API
@@ -52,7 +61,7 @@ export async function spotifyFetch<T>(
   };
 
   try {
-    const response = await fetch(url, {
+    const response = await fetchWithTimeout(url, {
       ...options,
       headers,
     });
@@ -96,17 +105,20 @@ export async function spotifyFetch<T>(
       return spotifyFetch<T>(endpoint, options, retryCount + 1);
     }
 
-    // Tangani error status lainnya
+    // Tangani error status lainnya (baca body sekali agar stream tidak terkonsumsi dua kali)
     if (!response.ok) {
       let errorMessage = `HTTP Error ${response.status}`;
-      try {
-        const errorBody: SpotifyApiErrorResponse = await response.json();
-        if (errorBody.error && errorBody.error.message) {
-          errorMessage = errorBody.error.message;
+      const rawErrorText = (await response.text()).trim();
+      if (rawErrorText.length > 0) {
+        const parsedError = tryParseJson(rawErrorText);
+        if (parsedError.ok) {
+          const errorBody = parsedError.value as Partial<SpotifyApiErrorResponse>;
+          if (errorBody?.error?.message) {
+            errorMessage = errorBody.error.message;
+          }
+        } else {
+          errorMessage = rawErrorText;
         }
-      } catch {
-        const text = await response.text();
-        if (text) errorMessage = text;
       }
 
       // Berikan konteks edukatif khusus untuk status 403 Forbidden pada kontrol playback
@@ -122,12 +134,29 @@ export async function spotifyFetch<T>(
       throw new SpotifyApiError(response.status, errorMessage);
     }
 
-    // Parsing JSON respons yang sukses
-    const data = await response.json();
-    return data as T;
+    // Endpoint playback Spotify sering mengembalikan 200 OK dengan body kosong atau teks non-JSON
+    const rawText = (await response.text()).trim();
+    if (rawText.length === 0) {
+      return {} as T;
+    }
+
+    const parsed = tryParseJson(rawText);
+    if (parsed.ok) {
+      return parsed.value as T;
+    }
+
+    const method = (options.method || 'GET').toUpperCase();
+    if (method !== 'GET') {
+      return {} as T;
+    }
+
+    throw new SyntaxError('Invalid JSON response from Spotify Web API');
   } catch (error) {
     if (error instanceof SpotifyApiError) {
       throw error;
+    }
+    if (isFetchTimeoutError(error)) {
+      throw new SpotifyApiError(408, errors.requestTimeout);
     }
     throw new SpotifyApiError(500, (error as Error).message || errors.networkError);
   }

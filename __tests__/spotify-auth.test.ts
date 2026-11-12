@@ -1,10 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
+import * as SecureStore from 'expo-secure-store';
 import { SPOTIFY_CONFIG } from '@/constants/Config';
 import {
   clearTokens,
+  completeAuthWithUrl,
+  getCachedSpotifyProfile,
   getValidAccessToken,
   hasRecentlyPlayedScope,
   refreshAccessToken,
+  saveCachedSpotifyProfile,
 } from '@/services/spotify/auth';
 
 const mockSecureStoreMemory = new Map<string, string>();
@@ -43,8 +47,10 @@ describe('services/spotify/auth', () => {
   const originalFetch = globalThis.fetch;
   let fetchMock: jest.MockedFunction<typeof fetch>;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    await clearTokens();
     mockSecureStoreMemory.clear();
+    jest.clearAllMocks();
     fetchMock = jest.fn() as jest.MockedFunction<typeof fetch>;
     globalThis.fetch = fetchMock;
   });
@@ -166,20 +172,24 @@ describe('services/spotify/auth', () => {
     expect(mockSecureStoreMemory.has(SPOTIFY_CONFIG.storageKeys.accessToken)).toBe(false);
   });
 
-  it('returns cached valid token without network call and refreshes expired tokens', async () => {
-    const futureExpiry = (Date.now() + 300_000).toString();
+  it('serves unexpired token from in-memory cache without re-reading SecureStore and refreshes when expired', async () => {
+    const baseNow = 1_700_000_000_000;
+    const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(baseNow);
+    const futureExpiry = (baseNow + 300_000).toString();
     mockSecureStoreMemory.set(SPOTIFY_CONFIG.storageKeys.accessToken, 'valid-access');
     mockSecureStoreMemory.set(SPOTIFY_CONFIG.storageKeys.refreshToken, 'valid-refresh');
     mockSecureStoreMemory.set(SPOTIFY_CONFIG.storageKeys.expiresAt, futureExpiry);
 
     expect(await getValidAccessToken()).toBe('valid-access');
+    const callsAfterFirstRead = (SecureStore.getItemAsync as jest.Mock).mock.calls.length;
+
+    // Second call uses in-memory cache (0 additional SecureStore reads)
+    expect(await getValidAccessToken()).toBe('valid-access');
+    expect((SecureStore.getItemAsync as jest.Mock).mock.calls.length).toBe(callsAfterFirstRead);
     expect(fetchMock).not.toHaveBeenCalled();
 
-    // Now expire the token
-    mockSecureStoreMemory.set(
-      SPOTIFY_CONFIG.storageKeys.expiresAt,
-      (Date.now() - 1000).toString()
-    );
+    // Advance clock past expiry
+    nowSpy.mockReturnValue(baseNow + 301_000);
     fetchMock.mockResolvedValueOnce({
       ok: true,
       status: 200,
@@ -193,6 +203,46 @@ describe('services/spotify/auth', () => {
 
     expect(await getValidAccessToken()).toBe('refreshed-access');
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('validates OAuth state in callback URLs and caches userProfile offline', async () => {
+    mockSecureStoreMemory.set('spotify_pkce_verifier', 'verifier-123');
+    mockSecureStoreMemory.set('spotify_pkce_state', 'expected-state');
+
+    await expect(
+      completeAuthWithUrl('walkthetalk://callback?code=auth-code&state=wrong-state')
+    ).rejects.toThrow(/state/i);
+
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        access_token: 'manual-access',
+        refresh_token: 'manual-refresh',
+        expires_in: 3600,
+        token_type: 'Bearer',
+        scope: 'user-read-private',
+      }),
+    } as Response);
+
+    await expect(
+      completeAuthWithUrl('walkthetalk://callback?code=auth-code&state=expected-state')
+    ).resolves.toBe(true);
+    expect(mockSecureStoreMemory.has('spotify_pkce_state')).toBe(false);
+
+    await saveCachedSpotifyProfile({
+      id: 'u1',
+      display_name: 'Runner',
+      product: 'premium',
+      uri: 'spotify:user:u1',
+    });
+    expect(await getCachedSpotifyProfile()).toMatchObject({
+      id: 'u1',
+      product: 'premium',
+    });
+
+    await clearTokens();
+    expect(await getCachedSpotifyProfile()).toBeNull();
   });
 
   it('tracks granted recently-played scope and clears it on logout', async () => {

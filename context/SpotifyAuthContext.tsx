@@ -10,9 +10,11 @@ import React, {
 import {
   clearTokens,
   completeAuthWithUrl,
+  getCachedSpotifyProfile,
   hasRecentlyPlayedScope,
   isSpotifyAuthenticated,
   loginWithSpotify,
+  saveCachedSpotifyProfile,
 } from '@/services/spotify/auth';
 import { getCurrentUser } from '@/services/spotify/player';
 import { getActiveLanguage, getTranslations } from '@/constants/i18n';
@@ -47,36 +49,47 @@ export function SpotifyAuthProvider({
   const [error, setError] = useState<string | null>(null);
   const isMountedRef = useRef<boolean>(true);
 
-  const checkAuth = useCallback(async () => {
+  const syncAuthState = useCallback(async (showSpinner: boolean = true) => {
     try {
-      setIsLoading(true);
+      if (showSpinner) {
+        setIsLoading(true);
+      }
       setError(null);
       const authed = await isSpotifyAuthenticated();
       if (!isMountedRef.current) return;
 
       setIsAuthenticated(authed);
 
-      if (authed) {
-        const hasHistoryScope = await hasRecentlyPlayedScope();
-        if (isMountedRef.current) {
-          setHasRecentlyPlayedPermission(hasHistoryScope);
-        }
-        try {
-          const profile = await getCurrentUser();
-          if (isMountedRef.current) {
-            setUser(profile);
-          }
-        } catch (err: any) {
-          console.warn('Gagal memuat profil Spotify pengguna:', err.message);
-          if (err?.status === 401 && isMountedRef.current) {
-            setIsAuthenticated(false);
-            setUser(null);
-            setHasRecentlyPlayedPermission(false);
-          }
-        }
-      } else {
+      if (!authed) {
         setUser(null);
         setHasRecentlyPlayedPermission(false);
+        return;
+      }
+
+      const [hasHistoryScope, cachedProfile] = await Promise.all([
+        hasRecentlyPlayedScope(),
+        getCachedSpotifyProfile(),
+      ]);
+
+      if (!isMountedRef.current) return;
+      setHasRecentlyPlayedPermission(hasHistoryScope);
+      if (cachedProfile) {
+        setUser((prev) => prev ?? cachedProfile);
+      }
+
+      try {
+        const profile = await getCurrentUser();
+        if (isMountedRef.current) {
+          setUser(profile);
+        }
+        await saveCachedSpotifyProfile(profile);
+      } catch (err: any) {
+        console.warn('Gagal memuat profil Spotify pengguna:', err.message);
+        if (err?.status === 401 && isMountedRef.current) {
+          setIsAuthenticated(false);
+          setUser(null);
+          setHasRecentlyPlayedPermission(false);
+        }
       }
     } catch (err: any) {
       if (isMountedRef.current) {
@@ -91,57 +104,21 @@ export function SpotifyAuthProvider({
     }
   }, []);
 
+  const checkAuth = useCallback(() => syncAuthState(true), [syncAuthState]);
+
   useEffect(() => {
     isMountedRef.current = true;
-
-    async function initialCheck() {
-      try {
-        const authed = await isSpotifyAuthenticated();
-        if (!isMountedRef.current) return;
-
-        setIsAuthenticated(authed);
-
-        if (authed) {
-          const hasHistoryScope = await hasRecentlyPlayedScope();
-          if (isMountedRef.current) {
-            setHasRecentlyPlayedPermission(hasHistoryScope);
-          }
-          try {
-            const profile = await getCurrentUser();
-            if (isMountedRef.current) {
-              setUser(profile);
-            }
-          } catch (err: any) {
-            console.warn('Gagal memuat profil Spotify pengguna:', err.message);
-            if (err?.status === 401 && isMountedRef.current) {
-              setIsAuthenticated(false);
-              setUser(null);
-              setHasRecentlyPlayedPermission(false);
-            }
-          }
-        } else {
-          setUser(null);
-          setHasRecentlyPlayedPermission(false);
-        }
-      } catch (err: any) {
-        if (isMountedRef.current) {
-          setError(
-            err.message || getTranslations(getActiveLanguage()).spotifyErrors.checkAuthFailed
-          );
-        }
-      } finally {
-        if (isMountedRef.current) {
-          setIsLoading(false);
-        }
+    const timer = setTimeout(() => {
+      if (isMountedRef.current) {
+        void syncAuthState(false);
       }
-    }
-
-    initialCheck();
+    }, 0);
 
     return () => {
+      clearTimeout(timer);
       isMountedRef.current = false;
     };
-  }, []);
+  }, [syncAuthState]);
 
   const login = useCallback(async () => {
     try {

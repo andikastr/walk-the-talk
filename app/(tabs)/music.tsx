@@ -30,7 +30,12 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useSpotifyAuth } from '@/hooks/useSpotifyAuth';
 import { useSpotifyPlayer, useSpotifyPlayerFocus } from '@/hooks/useSpotifyPlayer';
-import { getUserPlaylists, playMusic } from '@/services/spotify/player';
+import {
+  getUserPlaylists,
+  pickPreferredDevice,
+  playWithDeviceRecovery,
+  resolveSpotifyMediaMeta,
+} from '@/services/spotify/player';
 import { SpotifyPlaylist } from '@/types/spotify';
 import { FONT_FAMILY, RADIUS, SPACING, TYPOGRAPHY } from '@/constants/Colors';
 import { usePreferences } from '@/context/AppPreferencesContext';
@@ -97,37 +102,26 @@ export default function MusicScreen() {
   }, [isAuthenticated]);
 
   useEffect(() => {
-    let isMounted = true;
-    if (isAuthenticated) {
-      (async () => {
-        try {
-          setIsLoadingPlaylists(true);
-          const items = await getUserPlaylists(15);
-          if (isMounted) setPlaylists(items);
-        } catch (err: any) {
-          console.warn('Gagal memuat playlist Spotify:', err.message);
-        } finally {
-          if (isMounted) setIsLoadingPlaylists(false);
-        }
-      })();
-    }
-    return () => {
-      isMounted = false;
-    };
-  }, [isAuthenticated]);
+    if (!isAuthenticated) return;
+    const timer = setTimeout(() => {
+      void loadPlaylists();
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [isAuthenticated, loadPlaylists]);
 
   const handlePlayPlaylist = async (playlist: SpotifyPlaylist) => {
     try {
-      let targetDeviceId = activeDevice?.id;
+      let targetDeviceId = activeDevice?.id ?? undefined;
       if (!targetDeviceId) {
         const availableDevices = devices.length > 0 ? devices : await refreshDevices();
-        const target =
-          availableDevices.find((d) => d.is_active) ||
-          availableDevices.find((d) => d.type === 'Smartphone') ||
-          availableDevices[0];
-        targetDeviceId = target?.id;
+        targetDeviceId = pickPreferredDevice(availableDevices)?.id ?? undefined;
       }
-      await playMusic({ contextUri: playlist.uri, deviceId: targetDeviceId || undefined });
+
+      await playWithDeviceRecovery({
+        contextUri: playlist.uri,
+        deviceId: targetDeviceId,
+        refreshDevices,
+      });
     } catch (err: any) {
       const picked = await showDialog({
         kicker: t.common.warningKicker,
@@ -330,7 +324,8 @@ export default function MusicScreen() {
 
   // TAMPILAN SUDAH LOGIN
   const isPremium = user?.product === 'premium';
-  const albumImage = currentTrack?.album?.images?.[0]?.url;
+  const mediaMeta = resolveSpotifyMediaMeta(currentTrack);
+  const albumImage = mediaMeta.artworkUrl;
 
   return (
     <ScrollView
@@ -537,7 +532,7 @@ export default function MusicScreen() {
               style={[styles.nowPlayingTrackArtist, { color: palette.onFeatureMuted }]}
               numberOfLines={1}
             >
-              {currentTrack.artists?.map((a) => a.name).join(', ')}
+              {mediaMeta.subtitle}
             </Text>
 
             <View style={styles.playbackControls}>

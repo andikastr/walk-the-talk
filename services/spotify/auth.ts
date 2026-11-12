@@ -5,7 +5,8 @@ import * as Linking from 'expo-linking';
 import { getDefaultReturnUrl } from 'expo-auth-session';
 import { SPOTIFY_CONFIG } from '@/constants/Config';
 import { getActiveLanguage, getTranslations } from '@/constants/i18n';
-import { SpotifyTokenResponse } from '@/types/spotify';
+import { fetchWithTimeout, isFetchTimeoutError } from './http';
+import { SpotifyTokenResponse, SpotifyUser } from '@/types/spotify';
 
 // Pastikan WebBrowser dapat menyelesaikan sesi autentikasi
 WebBrowser.maybeCompleteAuthSession();
@@ -51,11 +52,13 @@ export async function loginWithSpotify(): Promise<boolean> {
   }
 
   const verifier = generateCodeVerifier(64);
+  const state = generateCodeVerifier(32);
   const challenge = await generateCodeChallenge(verifier);
 
-  // Simpan verifier di SecureStore agar dapat digunakan jika browser tidak redirect otomatis
+  // Simpan verifier & state di SecureStore agar dapat diverifikasi saat callback atau input manual
   await SecureStore.setItemAsync('spotify_pkce_verifier', verifier);
   await SecureStore.setItemAsync('spotify_pkce_redirect_uri', SPOTIFY_CONFIG.redirectUri);
+  await SecureStore.setItemAsync('spotify_pkce_state', state);
 
   const params = new URLSearchParams({
     client_id: SPOTIFY_CONFIG.clientId,
@@ -63,6 +66,7 @@ export async function loginWithSpotify(): Promise<boolean> {
     redirect_uri: SPOTIFY_CONFIG.redirectUri,
     code_challenge_method: 'S256',
     code_challenge: challenge,
+    state,
     scope: SPOTIFY_CONFIG.scopes.join(' '),
   });
 
@@ -95,12 +99,19 @@ export async function loginWithSpotify(): Promise<boolean> {
   const { queryParams } = Linking.parse(result.url);
   const rawCode = queryParams?.code;
   const rawError = queryParams?.error;
+  const rawState = queryParams?.state;
 
   const code = Array.isArray(rawCode) ? rawCode[0] : rawCode;
   const error = Array.isArray(rawError) ? rawError[0] : rawError;
+  const returnedState = Array.isArray(rawState) ? rawState[0] : rawState;
 
   if (error) {
     throw new Error(`Spotify Auth Error: ${error}`);
+  }
+
+  const expectedState = await SecureStore.getItemAsync('spotify_pkce_state');
+  if (expectedState && returnedState !== expectedState) {
+    throw new Error(errors.stateMismatch);
   }
 
   if (!code) {
@@ -109,6 +120,7 @@ export async function loginWithSpotify(): Promise<boolean> {
 
   // Tukarkan code dengan access token menggunakan code_verifier
   await exchangeCodeForToken(code, verifier);
+  await clearPkcePendingKeys();
   return true;
 }
 
@@ -130,13 +142,21 @@ async function exchangeCodeForToken(
     code_verifier: verifier,
   });
 
-  const response = await fetch(SPOTIFY_CONFIG.tokenEndpoint, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-    body: body.toString(),
-  });
+  let response: Response;
+  try {
+    response = await fetchWithTimeout(SPOTIFY_CONFIG.tokenEndpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: body.toString(),
+    });
+  } catch (err) {
+    if (isFetchTimeoutError(err)) {
+      throw new Error(errors.requestTimeout);
+    }
+    throw err;
+  }
 
   if (!response.ok) {
     const errText = await response.text();
@@ -164,6 +184,13 @@ async function exchangeCodeForToken(
 
 let refreshInFlight: Promise<string | null> | null = null;
 let authGeneration = 0;
+let cachedTokenState: { accessToken: string; expiresAt: number } | null = null;
+
+async function clearPkcePendingKeys(): Promise<void> {
+  await SecureStore.deleteItemAsync('spotify_pkce_verifier');
+  await SecureStore.deleteItemAsync('spotify_pkce_redirect_uri');
+  await SecureStore.deleteItemAsync('spotify_pkce_state');
+}
 
 /**
  * Eksekusi aktual refresh access token tanpa lock eksternal.
@@ -183,7 +210,7 @@ async function performRefreshAccessToken(): Promise<string | null> {
   });
 
   try {
-    const response = await fetch(SPOTIFY_CONFIG.tokenEndpoint, {
+    const response = await fetchWithTimeout(SPOTIFY_CONFIG.tokenEndpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
@@ -229,10 +256,17 @@ export async function refreshAccessToken(): Promise<string | null> {
 }
 
 /**
- * Menyimpan token secara terenkripsi di SecureStore
+ * Menyimpan token secara terenkripsi di SecureStore + memperbarui cache memori
  */
 async function saveTokens(data: SpotifyTokenResponse): Promise<void> {
   authGeneration += 1;
+  // Simpan timestamp kedaluwarsa (berikan buffer 60 detik)
+  const expiresAt = Date.now() + (data.expires_in - 60) * 1000;
+  cachedTokenState = {
+    accessToken: data.access_token,
+    expiresAt,
+  };
+
   await SecureStore.setItemAsync(SPOTIFY_CONFIG.storageKeys.accessToken, data.access_token);
 
   if (data.refresh_token) {
@@ -243,27 +277,37 @@ async function saveTokens(data: SpotifyTokenResponse): Promise<void> {
     await SecureStore.setItemAsync(SPOTIFY_CONFIG.storageKeys.grantedScope, data.scope.trim());
   }
 
-  // Simpan timestamp kedaluwarsa (berikan buffer 60 detik)
-  const expiresAt = Date.now() + (data.expires_in - 60) * 1000;
   await SecureStore.setItemAsync(SPOTIFY_CONFIG.storageKeys.expiresAt, expiresAt.toString());
 }
 
 /**
- * Mengambil valid access token (otomatis me-refresh jika hampir kedaluwarsa)
+ * Mengambil valid access token (membaca dari cache memori dulu agar polling tidak membebani SecureStore)
  */
 export async function getValidAccessToken(): Promise<string | null> {
+  if (cachedTokenState && Date.now() < cachedTokenState.expiresAt) {
+    return cachedTokenState.accessToken;
+  }
+
   const token = await SecureStore.getItemAsync(SPOTIFY_CONFIG.storageKeys.accessToken);
   const expiresAtStr = await SecureStore.getItemAsync(SPOTIFY_CONFIG.storageKeys.expiresAt);
 
-  if (!token) return null;
+  if (!token) {
+    cachedTokenState = null;
+    return null;
+  }
 
   const expiresAt = expiresAtStr ? parseInt(expiresAtStr, 10) : 0;
   const isExpired = Date.now() >= expiresAt;
 
   if (isExpired) {
+    cachedTokenState = null;
     return await refreshAccessToken();
   }
 
+  cachedTokenState = {
+    accessToken: token,
+    expiresAt,
+  };
   return token;
 }
 
@@ -273,6 +317,28 @@ export async function getValidAccessToken(): Promise<string | null> {
 export async function isSpotifyAuthenticated(): Promise<boolean> {
   const token = await getValidAccessToken();
   return !!token;
+}
+
+export async function getCachedSpotifyProfile(): Promise<SpotifyUser | null> {
+  try {
+    const raw = await SecureStore.getItemAsync(SPOTIFY_CONFIG.storageKeys.userProfile);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<SpotifyUser>;
+    return typeof parsed?.id === 'string' ? (parsed as SpotifyUser) : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function saveCachedSpotifyProfile(profile: SpotifyUser): Promise<void> {
+  try {
+    await SecureStore.setItemAsync(
+      SPOTIFY_CONFIG.storageKeys.userProfile,
+      JSON.stringify(profile)
+    );
+  } catch {
+    // Non-fatal: cache profil bersifat opsional
+  }
 }
 
 /**
@@ -288,6 +354,7 @@ export async function completeAuthWithUrl(urlOrCode: string): Promise<boolean> {
 
   const savedRedirectUri = await SecureStore.getItemAsync('spotify_pkce_redirect_uri');
   const redirectUri = savedRedirectUri || SPOTIFY_CONFIG.redirectUri;
+  const expectedState = await SecureStore.getItemAsync('spotify_pkce_state');
 
   let code = urlOrCode.trim();
 
@@ -301,6 +368,15 @@ export async function completeAuthWithUrl(urlOrCode: string): Promise<boolean> {
       ? decodeURIComponent(matchErr[1])
       : errors.accessDenied;
     throw new Error(errors.spotifyCanceledLogin(errText));
+  }
+
+  const isCallbackUrl = code.includes('://') || code.includes('?');
+  if (isCallbackUrl && expectedState) {
+    const stateMatch = code.match(/[?&]state=([^&#]+)/);
+    const returnedState = stateMatch?.[1] ? decodeURIComponent(stateMatch[1]) : undefined;
+    if (returnedState !== expectedState) {
+      throw new Error(errors.stateMismatch);
+    }
   }
 
   // Jika berupa URL lengkap
@@ -323,8 +399,7 @@ export async function completeAuthWithUrl(urlOrCode: string): Promise<boolean> {
   }
 
   await exchangeCodeForToken(code, verifier, redirectUri);
-  await SecureStore.deleteItemAsync('spotify_pkce_verifier');
-  await SecureStore.deleteItemAsync('spotify_pkce_redirect_uri');
+  await clearPkcePendingKeys();
   return true;
 }
 
@@ -333,13 +408,13 @@ export async function completeAuthWithUrl(urlOrCode: string): Promise<boolean> {
  */
 export async function clearTokens(): Promise<void> {
   authGeneration += 1;
+  cachedTokenState = null;
   await SecureStore.deleteItemAsync(SPOTIFY_CONFIG.storageKeys.accessToken);
   await SecureStore.deleteItemAsync(SPOTIFY_CONFIG.storageKeys.refreshToken);
   await SecureStore.deleteItemAsync(SPOTIFY_CONFIG.storageKeys.expiresAt);
   await SecureStore.deleteItemAsync(SPOTIFY_CONFIG.storageKeys.userProfile);
   await SecureStore.deleteItemAsync(SPOTIFY_CONFIG.storageKeys.grantedScope);
-  await SecureStore.deleteItemAsync('spotify_pkce_verifier');
-  await SecureStore.deleteItemAsync('spotify_pkce_redirect_uri');
+  await clearPkcePendingKeys();
 }
 
 export async function getGrantedScopes(): Promise<string[] | null> {
