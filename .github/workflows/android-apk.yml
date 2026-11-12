@@ -48,17 +48,23 @@ jobs:
           docker-images: true
           swap-storage: false
 
+      # free-disk-space menghapus /usr/local/lib/android memakai sudo; buat ulang agar setup-android tidak EACCES
+      - name: 3. Prepare Android SDK Directory
+        run: |
+          sudo mkdir -p /usr/local/lib/android
+          sudo chown -R "$(id -un):$(id -gn)" /usr/local/lib/android
+
       # Expo SDK 58 membutuhkan Node.js >= 22.13.x
-      - name: 3. Setup Node.js 22
+      - name: 4. Setup Node.js 22
         uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: 'npm'
 
-      - name: 4. Install Node Dependencies
+      - name: 5. Install Node Dependencies
         run: npm ci
 
-      - name: 5. Run Typecheck & Unit Tests
+      - name: 6. Run Typecheck & Unit Tests
         if: ${{ inputs.run_tests != false }}
         run: |
           npx tsc --noEmit
@@ -66,11 +72,11 @@ jobs:
 
       # Generate folder android/ bersih sesuai app.json + plugins lokal
       # Dijalankan SEBELUM setup-java agar cache: 'gradle' bisa menemukan gradle-wrapper.properties
-      - name: 6. Expo Prebuild (Android)
+      - name: 7. Expo Prebuild (Android)
         run: npx expo prebuild --platform android --clean --no-install
 
       # Gradle 9.4.1 (dari Expo SDK 58) membutuhkan JDK 17 atau lebih baru
-      - name: 7. Setup JDK 17 & Gradle Cache
+      - name: 8. Setup JDK 17 & Gradle Cache
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
@@ -78,22 +84,22 @@ jobs:
           cache: 'gradle'
 
       # Pasang Android commandline-tools & setujui semua lisensi SDK/NDK/CMake otomatis
-      - name: 8. Setup Android SDK & Accept Licenses
+      - name: 9. Setup Android SDK & Accept Licenses
         uses: android-actions/setup-android@v3
         with:
           accept-android-sdk-licenses: 'true'
 
       # Compile APK release (arm64-v8a + R8 minify sesuai app.json)
-      - name: 9. Build Release APK with Gradle
+      - name: 10. Build Release APK with Gradle
         working-directory: android
         run: |
           chmod +x gradlew
           ./gradlew assembleRelease --no-daemon
 
-      - name: 10. Verify APK Output
+      - name: 11. Verify APK Output
         run: ls -lh android/app/build/outputs/apk/release/
 
-      - name: 11. Upload APK to GitHub Artifacts
+      - name: 12. Upload APK to GitHub Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: walk-the-talk-release-apk
