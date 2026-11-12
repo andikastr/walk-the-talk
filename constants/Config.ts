@@ -76,6 +76,12 @@ export const WORKOUT_CONFIG = {
   maxCalibratedStrideMeters: 1.85,
   minCalibrationSteps: 100,
   minCalibrationDistanceMeters: 70,
+  stationaryStepGraceMs: 5000,
+  stationaryBypassDisplacementMeters: 22,
+  accuracyScaledMinMoveFactor: 0.45,
+  maxMetersPerHardwareStep: 2.25,
+  gpsDropoutBridgeDelayMs: 6000,
+  stepRateWindowMs: 8000,
 };
 
 export const MAP_CONFIG = {

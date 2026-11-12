@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import {
   clearActiveCheckpoint,
   deleteWorkout,
+  getCalibratedStrides,
   getRecentWorkouts,
   getWeeklyDailySummary,
   getWorkoutById,
@@ -9,6 +10,7 @@ import {
   getWorkoutStats,
   loadActiveCheckpoint,
   saveActiveCheckpoint,
+  saveCalibratedStride,
   saveWorkout,
 } from '@/services/database/workout-repo';
 import { createInitialCheckpoint } from '@/services/location/tracking-engine';
@@ -663,5 +665,27 @@ describe('services/database/workout-repo (O1–O3)', () => {
     expect(
       mockDbState.workoutSoundtracks.some((t) => t.workout_id === 'w_playlist')
     ).toBe(false);
+  });
+
+  it('persists cadence-band calibrated strides while preserving legacy scalar JSON compatibility', async () => {
+    mockDbState.appSettings.set(
+      'calibrated_strides_v1',
+      JSON.stringify({ walk: 0.74, run: 1.0 })
+    );
+
+    const legacy = await getCalibratedStrides();
+    expect(legacy.walk).toBe(0.74);
+    expect(legacy.run).toBe(1.0);
+    expect(legacy.bands).toBeUndefined();
+
+    const updated = await saveCalibratedStride('run', 1.25, 'runFast');
+    // 1.0 * 0.6 + 1.25 * 0.4 = 1.1
+    expect(updated.run).toBe(1.1);
+    expect(updated.bands?.runFast).toBe(1.25);
+
+    const reloaded = await getCalibratedStrides();
+    expect(reloaded.walk).toBe(0.74);
+    expect(reloaded.run).toBe(1.1);
+    expect(reloaded.bands?.runFast).toBe(1.25);
   });
 });

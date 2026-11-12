@@ -123,12 +123,22 @@ export function resolveMetForSpeed(type: WorkoutType, speedKmH: number): number 
   }
   if (type === 'jog') {
     return interpolateMet(speedKmH, [
+      [2.0, 2.3],
+      [4.0, 3.5],
+      [5.5, 4.3],
+      [6.5, 4.8],
       [7.0, 7.0],
       [8.5, 8.0],
       [9.5, 8.5],
     ]);
   }
   return interpolateMet(speedKmH, [
+    [2.0, 2.3],
+    [4.0, 3.5],
+    [5.5, 4.3],
+    [6.5, 4.8],
+    [7.5, 7.3],
+    [8.5, 8.0],
     [9.5, 9.0],
     [10.5, 10.0],
     [12.0, 11.5],

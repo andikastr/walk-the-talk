@@ -6,6 +6,9 @@ import {
   applyHardwareStepsToCheckpoint,
   applyManualPause,
   applyManualResume,
+  applyStationaryPaceDecay,
+  classifyCadenceBand,
+  computeFusedPaceSeconds,
   createInitialCheckpoint,
   evaluateIdleAutoPause,
   getElapsedActiveSeconds,
@@ -13,6 +16,7 @@ import {
   reconcileTotalHardwareStepsToCheckpoint,
   resolveStrideMeters,
 } from '@/services/location/tracking-engine';
+import { calculateHaversineDistance } from '@/services/location/metrics';
 import { WORKOUT_CONFIG } from '@/constants/Config';
 
 function makeLoc(
@@ -366,6 +370,212 @@ describe('services/location/tracking-engine', () => {
     expect(rec.checkpoint.steps).toBe(130);
     expect(rec.checkpoint.fallbackBgStepsAdded).toBe(0);
     expect(rec.checkpoint.lastSyncedNativeSteps).toBe(130);
+  });
+
+  it('rejects red-light stationary GPS drift when pedometer confirms zero steps', () => {
+    const start = 6_000_000;
+    let cp = createInitialCheckpoint({
+      type: 'walk',
+      trackingMode: 'outdoor',
+      autoPauseEnabled: true,
+      weightKg: 65,
+      now: start,
+    });
+
+    // Anchor GPS + record active steps at t+1s
+    cp = processGpsLocationSample(
+      cp,
+      makeLoc(-6.2, 106.8, start + 1000, { accuracy: 8, speed: 1.4 }),
+      { allowFallbackSteps: false, pedometerActive: true }
+    ).checkpoint;
+    cp = applyHardwareStepsToCheckpoint(cp, 6, start + 1000).checkpoint;
+    expect(cp.lastHardwareStepAt).toBe(start + 1000);
+
+    // Stop at red light (0 steps). After 6s (>= 5s grace), noisy GPS drifts ~6.1m
+    const driftRes = processGpsLocationSample(
+      cp,
+      makeLoc(-6.200055, 106.8, start + 7000, { accuracy: 8, speed: 1.4 }),
+      { allowFallbackSteps: false, pedometerActive: true }
+    );
+    expect(driftRes.acceptedPoint).toBe(false);
+    expect(driftRes.checkpoint.distanceMeters).toBe(0);
+    expect(driftRes.checkpoint.lastMovementOrStepAt).toBe(start + 1000);
+    expect(driftRes.checkpoint.smoothedCurrentPaceSeconds).toBe(0);
+
+    // At 8s idle, even noisy GPS jitter triggers Auto-Pause because steps stayed silent
+    const pauseRes = processGpsLocationSample(
+      driftRes.checkpoint,
+      makeLoc(-6.20006, 106.8, start + 9000, { accuracy: 8, speed: 1.5 }),
+      { allowFallbackSteps: false, pedometerActive: true }
+    );
+    expect(pauseRes.acceptedPoint).toBe(false);
+    expect(pauseRes.didAutoPause).toBe(true);
+    expect(pauseRes.checkpoint.isAutoPaused).toBe(true);
+
+    // Non-stepping bypass: >= 22m high-accuracy move (e.g. push-stroller) still escapes gate
+    const bypassRes = processGpsLocationSample(
+      driftRes.checkpoint,
+      makeLoc(-6.20023, 106.8, start + 7500, { accuracy: 8, speed: 3.2 }),
+      { allowFallbackSteps: false, pedometerActive: true }
+    );
+    expect(bypassRes.acceptedPoint).toBe(true);
+    expect(bypassRes.checkpoint.distanceMeters).toBeGreaterThan(22);
+  });
+
+  it('scales minimum movement floor by GPS accuracy and guards against step-implausible teleports', () => {
+    const start = 7_000_000;
+    let cp = createInitialCheckpoint({
+      type: 'run',
+      trackingMode: 'outdoor',
+      autoPauseEnabled: true,
+      weightKg: 68,
+      now: start,
+    });
+
+    // Anchor at start + 1s + 10 steps
+    cp = applyHardwareStepsToCheckpoint(cp, 10, start + 1000).checkpoint;
+    cp = processGpsLocationSample(
+      cp,
+      makeLoc(-6.2, 106.8, start + 1000, { accuracy: 8, speed: 3.0 }),
+      { allowFallbackSteps: false, pedometerActive: true }
+    ).checkpoint;
+    expect(cp.stepsAtLastAcceptedGps).toBe(10);
+
+    // Accuracy 20m -> dynamic floor = 20 * 0.45 = 9m -> ~6.5m zig-zag noise rejected
+    const weakZigZag = processGpsLocationSample(
+      cp,
+      makeLoc(-6.200058, 106.8, start + 3000, { accuracy: 20, speed: 2.5 }),
+      { allowFallbackSteps: true, pedometerActive: false }
+    );
+    expect(weakZigZag.acceptedPoint).toBe(false);
+
+    // Only +4 steps occurred (10 -> 14; max step bound = max(15, 4*2.25) = 15m),
+    // yet GPS jumps ~50m over 5s (10 m/s passes pure speed cap <12 m/s, fails step guard)
+    const cpWith4Steps = applyHardwareStepsToCheckpoint(cp, 4, start + 4500).checkpoint;
+    const teleportPoint = makeLoc(-6.20045, 106.8, start + 6000, { accuracy: 8, speed: 9.5 });
+    const rejectedTeleport = processGpsLocationSample(cpWith4Steps, teleportPoint, {
+      allowFallbackSteps: false,
+      pedometerActive: true,
+    });
+    expect(rejectedTeleport.acceptedPoint).toBe(false);
+    expect(rejectedTeleport.checkpoint.distanceMeters).toBe(0);
+
+    // Without pedometer active, speed is plausible and GPS passes baseline
+    const fallbackAccepted = processGpsLocationSample(cp, teleportPoint, {
+      allowFallbackSteps: true,
+      pedometerActive: false,
+    });
+    expect(fallbackAccepted.acceptedPoint).toBe(true);
+  });
+
+  it('bridges tunnel GPS blackouts via pedometer steps and reconciles exit GPS without double counting', () => {
+    const start = 8_000_000;
+    let cp = createInitialCheckpoint({
+      type: 'run',
+      trackingMode: 'outdoor',
+      autoPauseEnabled: true,
+      weightKg: 70,
+      now: start,
+    });
+
+    const p0 = makeLoc(-6.2, 106.8, start + 1000, { accuracy: 6, speed: 2.6 });
+    cp = processGpsLocationSample(cp, p0, {
+      allowFallbackSteps: false,
+      pedometerActive: true,
+      calibratedStrides: { run: 1.05 },
+    }).checkpoint;
+
+    // Runner enters tunnel: no GPS fixes for > 6s; hardware pedometer delivers 20 steps (21m)
+    cp = applyHardwareStepsToCheckpoint(cp, 10, start + 7500, { run: 1.05 }).checkpoint;
+    cp = applyHardwareStepsToCheckpoint(cp, 10, start + 9500, { run: 1.05 }).checkpoint;
+
+    expect(cp.bridgedMetersSinceLastGps).toBeCloseTo(21, 3);
+    expect(cp.distanceMeters).toBeCloseTo(21, 3);
+    expect(cp.smoothedCurrentPaceSeconds).toBeGreaterThan(0);
+    // Calibration step counter must NOT advance while bridging without GPS
+    expect(cp.calibHwSteps).toBe(0);
+
+    // Runner exits tunnel at t+11s with a ~25m straight chord from p0
+    const pExit = makeLoc(-6.200225, 106.8, start + 11_000, { accuracy: 8, speed: 2.8 });
+    const expectedChord = calculateHaversineDistance(p0.coords, pExit.coords);
+    const exitRes = processGpsLocationSample(cp, pExit, {
+      allowFallbackSteps: false,
+      pedometerActive: true,
+      calibratedStrides: { run: 1.05 },
+    });
+
+    expect(exitRes.acceptedPoint).toBe(true);
+    // Total distance equals true GPS chord (~25m), NOT bridged(21) + chord(25) = 46m
+    expect(exitRes.checkpoint.distanceMeters).toBeCloseTo(expectedChord, 2);
+    expect(exitRes.checkpoint.bridgedMetersSinceLastGps).toBe(0);
+    expect(exitRes.checkpoint.bridgedSplitSecondsSinceLastGps).toBe(0);
+    // Recovering from bridge must not pollute calibration distance
+    expect(exitRes.checkpoint.calibGpsMeters).toBe(0);
+  });
+
+  it('fuses GPS and cadence pace by accuracy, resolves cadence-band strides, and decays pace on idle', () => {
+    const profile = {
+      run: 1.0,
+      bands: {
+        walk: 0.7,
+        jog: 0.9,
+        runModerate: 1.08,
+        runFast: 1.25,
+      },
+    };
+    expect(classifyCadenceBand(115)).toBe('walk');
+    expect(classifyCadenceBand(145)).toBe('jog');
+    expect(classifyCadenceBand(165)).toBe('runModerate');
+    expect(classifyCadenceBand(182)).toBe('runFast');
+
+    expect(resolveStrideMeters('run', profile, 182)).toBe(1.25);
+    expect(resolveStrideMeters('run', profile, 165)).toBe(1.08);
+    expect(resolveStrideMeters('run', profile)).toBe(1.0);
+
+    const now = 9_000_000;
+    // Strong fresh GPS weights 70% GPS (4.0 m/s) + 30% Pedometer (2.0 m/s) -> 3.4 m/s -> ~294 s/km
+    const strongPace = computeFusedPaceSeconds({
+      prevSmoothedPace: 0,
+      gpsSpeedMps: 4.0,
+      gpsAccuracyMeters: 6,
+      gpsAgeMs: 0,
+      recentPoints: [],
+      pedometerActive: true,
+      lastHardwareStepAt: now - 500,
+      pedometerSpeedMps: 2.0,
+      now,
+    });
+    expect(strongPace).toBe(294);
+
+    // Degraded GPS (18m accuracy) shifts weight to 35% GPS (4.0) + 65% Pedometer (2.0) -> 2.7 m/s -> ~370 s/km
+    const weakGpsPace = computeFusedPaceSeconds({
+      prevSmoothedPace: 0,
+      gpsSpeedMps: 4.0,
+      gpsAccuracyMeters: 18,
+      gpsAgeMs: 0,
+      recentPoints: [],
+      pedometerActive: true,
+      lastHardwareStepAt: now - 500,
+      pedometerSpeedMps: 2.0,
+      now,
+    });
+    expect(weakGpsPace).toBe(370);
+
+    // Idle pace decay clears pace cleanly after 3.5s without steps
+    const activeCp = {
+      ...createInitialCheckpoint({
+        type: 'run',
+        trackingMode: 'outdoor',
+        autoPauseEnabled: true,
+        weightKg: 70,
+        now: now - 10_000,
+      }),
+      smoothedCurrentPaceSeconds: 320,
+      lastHardwareStepAt: now - 3600,
+    };
+    expect(applyStationaryPaceDecay(activeCp, now - 1000, true)).toBe(activeCp);
+    const decayed = applyStationaryPaceDecay(activeCp, now, true);
+    expect(decayed.smoothedCurrentPaceSeconds).toBe(0);
   });
 });
 

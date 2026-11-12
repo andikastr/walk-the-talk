@@ -1,5 +1,11 @@
 export type WorkoutType = 'walk' | 'jog' | 'run';
 
+export type StrideCadenceBand = 'walk' | 'jog' | 'runModerate' | 'runFast';
+
+export type CalibratedStrideProfile = Partial<Record<WorkoutType, number>> & {
+  bands?: Partial<Record<StrideCadenceBand, number>>;
+};
+
 export type WorkoutStatus = 'idle' | 'recording' | 'paused' | 'completed';
 
 export type TrackingMode = 'outdoor' | 'indoor';
@@ -90,6 +96,12 @@ export interface ActiveWorkoutCheckpoint {
   distanceAtLastStepEvent: number;
   fallbackBgStepsAdded: number;
   lastSyncedNativeSteps?: number;
+  lastHardwareStepAt?: number;
+  lastAcceptedGpsAt?: number;
+  stepsAtLastAcceptedGps?: number;
+  bridgedMetersSinceLastGps?: number;
+  bridgedSplitSecondsSinceLastGps?: number;
+  recentStepEvents?: { timestamp: number; deltaSteps: number }[];
   calibGpsMeters: number;
   calibHwSteps: number;
   weightKg: number;

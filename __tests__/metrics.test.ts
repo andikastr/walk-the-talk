@@ -70,6 +70,13 @@ describe('services/location/metrics', () => {
     expect(resolveMetForSpeed('jog', 8.5)).toBe(8.0);
     expect(resolveMetForSpeed('run', 12.0)).toBe(11.5);
     expect(resolveMetForSpeed('run', 16.0)).toBe(12.5);
+
+    // Speed-continuous recovery: walking breaks inside jog/run follow walking MET curve
+    const walkBreakInRun = resolveMetForSpeed('run', 4.5);
+    expect(walkBreakInRun).toBeGreaterThan(3.5);
+    expect(walkBreakInRun).toBeLessThan(4.2);
+    expect(resolveMetForSpeed('jog', 4.75)).toBeCloseTo(3.9, 4);
+    expect(resolveMetForSpeed('run', 10.5)).toBeGreaterThan(resolveMetForSpeed('run', 7.5));
   });
 
   it('estimates calories with speed sensitivity, per-split weighting, and elevation climb cost', () => {

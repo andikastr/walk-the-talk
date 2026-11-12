@@ -1,7 +1,9 @@
 import * as SQLite from 'expo-sqlite';
 import {
   ActiveWorkoutCheckpoint,
+  CalibratedStrideProfile,
   GPSCoordinate,
+  StrideCadenceBand,
   WorkoutRecord,
   WorkoutSoundtrackItem,
   WorkoutStats,
@@ -736,11 +738,11 @@ export async function clearActiveCheckpoint(): Promise<void> {
   });
 }
 
-export async function getCalibratedStrides(): Promise<Partial<Record<WorkoutType, number>>> {
+export async function getCalibratedStrides(): Promise<CalibratedStrideProfile> {
   const raw = await getAppSetting(CALIBRATED_STRIDES_SETTING_KEY);
   if (!raw) return {};
   try {
-    const parsed = JSON.parse(raw) as Partial<Record<WorkoutType, number>>;
+    const parsed = JSON.parse(raw) as CalibratedStrideProfile;
     return parsed && typeof parsed === 'object' ? parsed : {};
   } catch {
     return {};
@@ -749,8 +751,9 @@ export async function getCalibratedStrides(): Promise<Partial<Record<WorkoutType
 
 export async function saveCalibratedStride(
   type: WorkoutType,
-  strideMeters: number
-): Promise<Partial<Record<WorkoutType, number>>> {
+  strideMeters: number,
+  cadenceBand?: StrideCadenceBand
+): Promise<CalibratedStrideProfile> {
   const clamped = Math.min(
     WORKOUT_CONFIG.maxCalibratedStrideMeters,
     Math.max(WORKOUT_CONFIG.minCalibratedStrideMeters, strideMeters)
@@ -761,9 +764,24 @@ export async function saveCalibratedStride(
     typeof prev === 'number' && Number.isFinite(prev)
       ? Number((prev * 0.6 + clamped * 0.4).toFixed(3))
       : Number(clamped.toFixed(3));
-  const next: Partial<Record<WorkoutType, number>> = {
+
+  let nextBands = current.bands;
+  if (cadenceBand) {
+    const prevBand = current.bands?.[cadenceBand];
+    const blendedBand =
+      typeof prevBand === 'number' && Number.isFinite(prevBand)
+        ? Number((prevBand * 0.6 + clamped * 0.4).toFixed(3))
+        : Number(clamped.toFixed(3));
+    nextBands = {
+      ...(current.bands ?? {}),
+      [cadenceBand]: blendedBand,
+    };
+  }
+
+  const next: CalibratedStrideProfile = {
     ...current,
     [type]: blended,
+    ...(nextBands ? { bands: nextBands } : {}),
   };
   await setAppSetting(CALIBRATED_STRIDES_SETTING_KEY, JSON.stringify(next));
   return next;

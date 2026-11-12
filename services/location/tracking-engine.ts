@@ -1,12 +1,14 @@
 import * as Location from 'expo-location';
 import {
   ActiveWorkoutCheckpoint,
+  CalibratedStrideProfile,
   GPSCoordinate,
+  StrideCadenceBand,
   WorkoutSplit,
   WorkoutType,
 } from '@/types/workout';
 import { WORKOUT_CONFIG } from '@/constants/Config';
-import { calculateHaversineDistance, calculatePaceSeconds } from '@/services/location/metrics';
+import { calculateHaversineDistance } from '@/services/location/metrics';
 
 export interface CreateCheckpointOptions {
   type: WorkoutType;
@@ -18,7 +20,8 @@ export interface CreateCheckpointOptions {
 
 export interface ProcessGpsSampleOptions {
   allowFallbackSteps: boolean;
-  calibratedStrides?: Partial<Record<WorkoutType, number>>;
+  pedometerActive?: boolean;
+  calibratedStrides?: CalibratedStrideProfile;
 }
 
 export interface ProcessGpsResult {
@@ -32,17 +35,41 @@ export interface ProcessGpsResult {
 const MIN_PLAUSIBLE_PACE_SEC_PER_KM = 90; // 1:30 / km
 const MAX_PLAUSIBLE_PACE_SEC_PER_KM = 1800; // 30:00 / km
 
+function isValidStride(val: unknown): val is number {
+  return (
+    typeof val === 'number' &&
+    Number.isFinite(val) &&
+    val >= WORKOUT_CONFIG.minCalibratedStrideMeters &&
+    val <= WORKOUT_CONFIG.maxCalibratedStrideMeters
+  );
+}
+
+export function classifyCadenceBand(cadenceSpm: number): StrideCadenceBand {
+  if (cadenceSpm < 125) return 'walk';
+  if (cadenceSpm < 155) return 'jog';
+  if (cadenceSpm < 175) return 'runModerate';
+  return 'runFast';
+}
+
 export function resolveStrideMeters(
   type: WorkoutType,
-  calibratedStrides?: Partial<Record<WorkoutType, number>>
+  calibratedStrides?: CalibratedStrideProfile,
+  currentCadenceSpm?: number
 ): number {
-  const calibrated = calibratedStrides?.[type];
   if (
-    typeof calibrated === 'number' &&
-    Number.isFinite(calibrated) &&
-    calibrated >= WORKOUT_CONFIG.minCalibratedStrideMeters &&
-    calibrated <= WORKOUT_CONFIG.maxCalibratedStrideMeters
+    typeof currentCadenceSpm === 'number' &&
+    Number.isFinite(currentCadenceSpm) &&
+    currentCadenceSpm > 0
   ) {
+    const band = classifyCadenceBand(currentCadenceSpm);
+    const bandStride = calibratedStrides?.bands?.[band];
+    if (isValidStride(bandStride)) {
+      return bandStride;
+    }
+  }
+
+  const calibrated = calibratedStrides?.[type];
+  if (isValidStride(calibrated)) {
     return calibrated;
   }
   return WORKOUT_CONFIG.strideMetersByType[type] || WORKOUT_CONFIG.strideMetersByType.walk;
@@ -126,6 +153,11 @@ export function applyManualPause(
     smoothedCurrentPaceSeconds: 0,
     lastAnchoredPoint: null,
     recentPoints: [],
+    lastAcceptedGpsAt: undefined,
+    stepsAtLastAcceptedGps: checkpoint.steps,
+    bridgedMetersSinceLastGps: 0,
+    bridgedSplitSecondsSinceLastGps: 0,
+    recentStepEvents: [],
     currentSegmentIndex: checkpoint.currentSegmentIndex + 1,
   };
 }
@@ -142,6 +174,11 @@ export function applyManualResume(
     lastMovementOrStepAt: now,
     lastStepSyncTimestamp: now,
     distanceAtLastStepEvent: checkpoint.distanceMeters,
+    lastAcceptedGpsAt: undefined,
+    stepsAtLastAcceptedGps: checkpoint.steps,
+    bridgedMetersSinceLastGps: 0,
+    bridgedSplitSecondsSinceLastGps: 0,
+    recentStepEvents: [],
   };
 }
 
@@ -161,6 +198,11 @@ export function applyAutoPauseState(
     smoothedCurrentPaceSeconds: 0,
     lastAnchoredPoint: null,
     recentPoints: [],
+    lastAcceptedGpsAt: undefined,
+    stepsAtLastAcceptedGps: checkpoint.steps,
+    bridgedMetersSinceLastGps: 0,
+    bridgedSplitSecondsSinceLastGps: 0,
+    recentStepEvents: [],
     currentSegmentIndex: checkpoint.currentSegmentIndex + 1,
   };
 }
@@ -202,6 +244,11 @@ function applyAutoResumeState(
     lastMovementOrStepAt: resumeAtMs,
     lastStepSyncTimestamp: resumeAtMs,
     distanceAtLastStepEvent: checkpoint.distanceMeters,
+    lastAcceptedGpsAt: undefined,
+    stepsAtLastAcceptedGps: checkpoint.steps,
+    bridgedMetersSinceLastGps: 0,
+    bridgedSplitSecondsSinceLastGps: 0,
+    recentStepEvents: [],
   };
 }
 
@@ -340,30 +387,136 @@ function computeElevationStep(
   };
 }
 
-function updateSmoothedPace(
-  prevSmoothedPace: number,
+interface StepEventSample {
+  timestamp: number;
+  deltaSteps: number;
+}
+
+function pruneStepEvents(events: StepEventSample[] | undefined, now: number): StepEventSample[] {
+  if (!events || events.length === 0) return [];
+  const minTs = now - WORKOUT_CONFIG.stepRateWindowMs;
+  return events.filter((e) => e.timestamp >= minTs && e.timestamp <= now + 2000 && e.deltaSteps > 0);
+}
+
+function appendStepEvent(
+  events: StepEventSample[] | undefined,
+  now: number,
+  deltaSteps: number
+): StepEventSample[] {
+  const valid = pruneStepEvents(events, now);
+  if (deltaSteps <= 0) return valid;
+  return [...valid, { timestamp: now, deltaSteps }].slice(-32);
+}
+
+export function computeLiveCadenceSpm(
+  events: StepEventSample[] | undefined,
+  now: number
+): number {
+  const valid = pruneStepEvents(events, now);
+  if (valid.length === 0) return 0;
+
+  const lastEvent = valid[valid.length - 1];
+  if (now - lastEvent.timestamp >= 3000) return 0;
+
+  const firstEvent = valid[0];
+  const spanMs = lastEvent.timestamp - firstEvent.timestamp;
+  if (valid.length < 2 || spanMs < 1200) {
+    return 0;
+  }
+
+  let stepsInSpan = 0;
+  for (let i = 1; i < valid.length; i++) {
+    stepsInSpan += valid[i].deltaSteps;
+  }
+  if (stepsInSpan < 2) return 0;
+
+  return Math.round((stepsInSpan / (spanMs / 1000)) * 60);
+}
+
+function computePedometerSpeedMps(
+  events: StepEventSample[] | undefined,
+  now: number,
+  type: WorkoutType,
+  calibratedStrides?: CalibratedStrideProfile
+): number {
+  const cadenceSpm = computeLiveCadenceSpm(events, now);
+  if (cadenceSpm <= 0) return 0;
+  const stride = resolveStrideMeters(type, calibratedStrides, cadenceSpm);
+  return (cadenceSpm / 60) * stride;
+}
+
+function resolveGpsSpeedMps(
   speedMps: number | null | undefined,
   recentPoints: GPSCoordinate[]
-): number {
-  let rawPace = 0;
-
-  if (typeof speedMps === 'number' && Number.isFinite(speedMps)) {
-    if (speedMps < WORKOUT_CONFIG.autoPauseSpeedMps) {
-      return 0;
-    }
-    rawPace = 1000 / speedMps;
-  } else if (recentPoints.length >= 2) {
+): number | null {
+  if (typeof speedMps === 'number' && Number.isFinite(speedMps) && speedMps >= 0) {
+    return speedMps;
+  }
+  if (recentPoints.length >= 2) {
     const first = recentPoints[0];
     const last = recentPoints[recentPoints.length - 1];
     const segDist = calculateHaversineDistance(first, last);
     const segTimeSec = Math.max(1, (last.timestamp - first.timestamp) / 1000);
     if (segDist >= 5) {
-      rawPace = calculatePaceSeconds(segDist, segTimeSec);
+      return segDist / segTimeSec;
     }
   }
+  return null;
+}
 
+export function computeFusedPaceSeconds(params: {
+  prevSmoothedPace: number;
+  gpsSpeedMps: number | null | undefined;
+  gpsAccuracyMeters: number | null | undefined;
+  gpsAgeMs: number;
+  recentPoints: GPSCoordinate[];
+  pedometerActive: boolean;
+  lastHardwareStepAt: number | undefined;
+  pedometerSpeedMps: number;
+  now: number;
+}): number {
+  const {
+    prevSmoothedPace,
+    gpsSpeedMps,
+    gpsAccuracyMeters,
+    gpsAgeMs,
+    recentPoints,
+    pedometerActive,
+    lastHardwareStepAt,
+    pedometerSpeedMps,
+    now,
+  } = params;
+
+  if (pedometerActive && lastHardwareStepAt != null && now - lastHardwareStepAt >= 3000) {
+    return 0;
+  }
+
+  const resolvedGpsSpeed = resolveGpsSpeedMps(gpsSpeedMps, recentPoints);
+  let blendedSpeedMps: number | null = null;
+
+  if (pedometerActive && pedometerSpeedMps >= WORKOUT_CONFIG.autoPauseSpeedMps) {
+    if (resolvedGpsSpeed != null && resolvedGpsSpeed >= WORKOUT_CONFIG.autoPauseSpeedMps) {
+      const strongFreshGps =
+        gpsAccuracyMeters != null && gpsAccuracyMeters <= 10 && gpsAgeMs <= 4000;
+      const gpsWeight = strongFreshGps ? 0.7 : 0.35;
+      blendedSpeedMps =
+        gpsWeight * resolvedGpsSpeed + (1 - gpsWeight) * pedometerSpeedMps;
+    } else {
+      blendedSpeedMps = pedometerSpeedMps;
+    }
+  } else if (resolvedGpsSpeed != null) {
+    if (resolvedGpsSpeed < WORKOUT_CONFIG.autoPauseSpeedMps) {
+      return 0;
+    }
+    blendedSpeedMps = resolvedGpsSpeed;
+  }
+
+  if (blendedSpeedMps == null || !Number.isFinite(blendedSpeedMps) || blendedSpeedMps <= 0) {
+    return prevSmoothedPace;
+  }
+
+  const rawPace = 1000 / blendedSpeedMps;
   if (
-    !rawPace ||
     !Number.isFinite(rawPace) ||
     rawPace < MIN_PLAUSIBLE_PACE_SEC_PER_KM ||
     rawPace > MAX_PLAUSIBLE_PACE_SEC_PER_KM
@@ -372,15 +525,38 @@ function updateSmoothedPace(
   }
 
   return prevSmoothedPace > 0
-    ? Math.round(prevSmoothedPace * 0.65 + rawPace * 0.35)
+    ? Math.round(prevSmoothedPace * 0.55 + rawPace * 0.45)
     : Math.round(rawPace);
+}
+
+export function applyStationaryPaceDecay(
+  checkpoint: ActiveWorkoutCheckpoint,
+  now: number,
+  pedometerActive: boolean
+): ActiveWorkoutCheckpoint {
+  if (checkpoint.status !== 'recording' || checkpoint.smoothedCurrentPaceSeconds <= 0) {
+    return checkpoint;
+  }
+  const idleBySteps =
+    pedometerActive &&
+    checkpoint.lastHardwareStepAt != null &&
+    now - checkpoint.lastHardwareStepAt >= 3500;
+  const idleByMovement =
+    !pedometerActive && now - checkpoint.lastMovementOrStepAt >= 5000;
+  if (!idleBySteps && !idleByMovement) {
+    return checkpoint;
+  }
+  return {
+    ...checkpoint,
+    smoothedCurrentPaceSeconds: 0,
+  };
 }
 
 export function applyFallbackStepsToCheckpoint(
   checkpoint: ActiveWorkoutCheckpoint,
   distanceMeters: number,
   now: number,
-  calibratedStrides?: Partial<Record<WorkoutType, number>>,
+  calibratedStrides?: CalibratedStrideProfile,
   forceFallback: boolean = false
 ): ActiveWorkoutCheckpoint {
   if (checkpoint.trackingMode === 'indoor') return checkpoint;
@@ -408,6 +584,55 @@ export function applyFallbackStepsToCheckpoint(
   };
 }
 
+function rejectStationaryGpsFix(
+  checkpoint: ActiveWorkoutCheckpoint,
+  timestamp: number,
+  speed: number | null | undefined,
+  pedometerActive: boolean,
+  coords: Location.LocationObjectCoords,
+  didAutoResume: boolean
+): ProcessGpsResult {
+  const isSpeedStationary =
+    typeof speed === 'number' &&
+    Number.isFinite(speed) &&
+    speed < WORKOUT_CONFIG.autoPauseSpeedMps;
+  const msSinceStep =
+    checkpoint.lastHardwareStepAt != null
+      ? Math.max(0, timestamp - checkpoint.lastHardwareStepAt)
+      : null;
+  const stepsIdleLong =
+    pedometerActive &&
+    msSinceStep != null &&
+    msSinceStep >= WORKOUT_CONFIG.stationaryStepGraceMs;
+
+  let nextCp = checkpoint;
+  let didAutoPause = false;
+
+  if (
+    nextCp.autoPauseEnabled &&
+    (isSpeedStationary || speed == null || stepsIdleLong) &&
+    timestamp - nextCp.lastMovementOrStepAt >= WORKOUT_CONFIG.autoPauseIdleMs
+  ) {
+    nextCp = applyAutoPauseState(nextCp, timestamp);
+    didAutoPause = true;
+  } else if (
+    pedometerActive &&
+    msSinceStep != null &&
+    msSinceStep >= 3000 &&
+    nextCp.smoothedCurrentPaceSeconds > 0
+  ) {
+    nextCp = { ...nextCp, smoothedCurrentPaceSeconds: 0 };
+  }
+
+  return {
+    checkpoint: nextCp,
+    acceptedPoint: false,
+    didAutoPause,
+    didAutoResume,
+    latestCoords: coords,
+  };
+}
+
 export function processGpsLocationSample(
   inputCheckpoint: ActiveWorkoutCheckpoint,
   loc: Location.LocationObject,
@@ -419,6 +644,7 @@ export function processGpsLocationSample(
     typeof loc.timestamp === 'number' && Number.isFinite(loc.timestamp) && loc.timestamp > 0
       ? loc.timestamp
       : Date.now();
+  const pedometerActive = Boolean(options.pedometerActive);
 
   if (
     !Number.isFinite(latitude) ||
@@ -463,7 +689,6 @@ export function processGpsLocationSample(
   }
 
   let checkpoint = inputCheckpoint;
-  let didAutoPause = false;
   let didAutoResume = false;
 
   const newPoint: GPSCoordinate = {
@@ -516,6 +741,10 @@ export function processGpsLocationSample(
     checkpoint = {
       ...checkpoint,
       lastAnchoredPoint: newPoint,
+      lastAcceptedGpsAt: timestamp,
+      stepsAtLastAcceptedGps: checkpoint.steps,
+      bridgedMetersSinceLastGps: 0,
+      bridgedSplitSecondsSinceLastGps: 0,
       recentPoints: [newPoint],
       routePoints: nextRoute,
       smoothedAltitudeMeters: nextElev.smoothedAltitudeMeters,
@@ -525,7 +754,7 @@ export function processGpsLocationSample(
     return {
       checkpoint,
       acceptedPoint: true,
-      didAutoPause,
+      didAutoPause: false,
       didAutoResume,
       latestCoords: coords,
     };
@@ -538,7 +767,7 @@ export function processGpsLocationSample(
     return {
       checkpoint,
       acceptedPoint: false,
-      didAutoPause,
+      didAutoPause: false,
       didAutoResume,
       latestCoords: coords,
     };
@@ -553,37 +782,88 @@ export function processGpsLocationSample(
     return {
       checkpoint,
       acceptedPoint: false,
-      didAutoPause,
+      didAutoPause: false,
       didAutoResume,
       latestCoords: coords,
     };
   }
 
-  const isSpeedStationary =
-    typeof speed === 'number' &&
-    Number.isFinite(speed) &&
-    speed < WORKOUT_CONFIG.autoPauseSpeedMps;
+  // Filter perpindahan minimum diskalakan terhadap akurasi GPS untuk meredam zig-zag
+  const effectiveAccuracy =
+    accuracy != null && Number.isFinite(accuracy)
+      ? accuracy
+      : WORKOUT_CONFIG.gpsGoodAccuracyMeters;
+  const effectiveMinMove = Math.max(
+    WORKOUT_CONFIG.minMovementDistanceMeters,
+    effectiveAccuracy * WORKOUT_CONFIG.accuracyScaledMinMoveFactor
+  );
 
-  // Cek perpindahan minimum untuk mencegah GPS drift saat diam
-  if (stepDist < WORKOUT_CONFIG.minMovementDistanceMeters) {
-    if (
-      checkpoint.autoPauseEnabled &&
-      (isSpeedStationary || speed == null) &&
-      timestamp - checkpoint.lastMovementOrStepAt >= WORKOUT_CONFIG.autoPauseIdleMs
-    ) {
-      checkpoint = applyAutoPauseState(checkpoint, timestamp);
-      didAutoPause = true;
-    }
+  if (stepDist < effectiveMinMove) {
+    return rejectStationaryGpsFix(
+      checkpoint,
+      timestamp,
+      speed,
+      pedometerActive,
+      coords,
+      didAutoResume
+    );
+  }
+
+  // Stationary Drift Gate: saat pedometer aktif namun tidak ada langkah dalam >= 5 detik, tolak drift kecil
+  const msSinceStep =
+    checkpoint.lastHardwareStepAt != null
+      ? Math.max(0, timestamp - checkpoint.lastHardwareStepAt)
+      : null;
+  const isBypassDisplacement =
+    stepDist >= WORKOUT_CONFIG.stationaryBypassDisplacementMeters &&
+    accuracy != null &&
+    accuracy <= 10;
+  const allowNonSteppingBypass =
+    msSinceStep != null &&
+    msSinceStep >= WORKOUT_CONFIG.stationaryStepGraceMs &&
+    isBypassDisplacement;
+
+  if (
+    pedometerActive &&
+    msSinceStep != null &&
+    msSinceStep >= WORKOUT_CONFIG.stationaryStepGraceMs &&
+    !allowNonSteppingBypass
+  ) {
+    return rejectStationaryGpsFix(
+      checkpoint,
+      timestamp,
+      speed,
+      pedometerActive,
+      coords,
+      didAutoResume
+    );
+  }
+
+  // Step-Bounded Plausibility Guard: deteksi lonjakan teleport GPS dibanding jumlah langkah nyata
+  const baseSteps = checkpoint.stepsAtLastAcceptedGps ?? checkpoint.steps;
+  const stepsDelta = Math.max(0, checkpoint.steps - baseSteps);
+  if (
+    !allowNonSteppingBypass &&
+    pedometerActive &&
+    checkpoint.lastHardwareStepAt != null &&
+    stepsDelta >= 2 &&
+    stepDist > Math.max(15, stepsDelta * WORKOUT_CONFIG.maxMetersPerHardwareStep)
+  ) {
     return {
       checkpoint,
       acceptedPoint: false,
-      didAutoPause,
+      didAutoPause: false,
       didAutoResume,
       latestCoords: coords,
     };
   }
 
-  // Titik valid dan menunjukkan pergerakan nyata
+  // Titik valid dan menunjukkan pergerakan nyata; rekonsiliasi jarak blackout tanpa double-count
+  const bridgedMeters = checkpoint.bridgedMetersSinceLastGps ?? 0;
+  const bridgedSplitSec = checkpoint.bridgedSplitSecondsSinceLastGps ?? 0;
+  const netAddedDist = bridgedMeters > 0 ? Math.max(0, stepDist - bridgedMeters) : stepDist;
+  const netSplitDtSec = bridgedSplitSec > 0 ? Math.max(0, dtSec - bridgedSplitSec) : dtSec;
+
   const elevStep = computeElevationStep(
     checkpoint.smoothedAltitudeMeters,
     checkpoint.elevationAnchorMeters,
@@ -591,26 +871,43 @@ export function processGpsLocationSample(
     dtSec
   );
 
-  const nextDist = checkpoint.distanceMeters + stepDist;
+  const nextDist = checkpoint.distanceMeters + netAddedDist;
   const nextRecent = [...checkpoint.recentPoints, newPoint].slice(-6);
-  const nextPace = updateSmoothedPace(
-    checkpoint.smoothedCurrentPaceSeconds,
-    speed,
-    nextRecent
-  );
+  const evalNow = Math.max(timestamp, checkpoint.lastHardwareStepAt ?? 0);
+  const pedometerSpeedMps = pedometerActive
+    ? computePedometerSpeedMps(
+        checkpoint.recentStepEvents,
+        evalNow,
+        checkpoint.type,
+        options.calibratedStrides
+      )
+    : 0;
+  const nextPace = computeFusedPaceSeconds({
+    prevSmoothedPace: checkpoint.smoothedCurrentPaceSeconds,
+    gpsSpeedMps: speed,
+    gpsAccuracyMeters: accuracy,
+    gpsAgeMs: 0,
+    recentPoints: nextRecent,
+    pedometerActive,
+    lastHardwareStepAt: checkpoint.lastHardwareStepAt,
+    pedometerSpeedMps,
+    now: evalNow,
+  });
 
   const splitUpdate = advanceSplitsIncremental(
     checkpoint.splits,
     checkpoint.splitProgressMeters,
     checkpoint.splitProgressSeconds,
     checkpoint.splitElevationGainMeters,
-    stepDist,
-    dtSec,
+    netAddedDist,
+    netSplitDtSec,
     elevStep.addedGainMeters
   );
 
   const highQualityFix =
-    accuracy == null || accuracy <= WORKOUT_CONFIG.gpsGoodAccuracyMeters;
+    (accuracy == null || accuracy <= WORKOUT_CONFIG.gpsGoodAccuracyMeters) &&
+    bridgedMeters === 0 &&
+    !isBypassDisplacement;
 
   let updatedCheckpoint: ActiveWorkoutCheckpoint = {
     ...checkpoint,
@@ -620,6 +917,10 @@ export function processGpsLocationSample(
     elevationAnchorMeters: elevStep.elevationAnchorMeters,
     smoothedCurrentPaceSeconds: nextPace,
     lastAnchoredPoint: newPoint,
+    lastAcceptedGpsAt: timestamp,
+    stepsAtLastAcceptedGps: checkpoint.steps,
+    bridgedMetersSinceLastGps: 0,
+    bridgedSplitSecondsSinceLastGps: 0,
     recentPoints: nextRecent,
     routePoints: [...checkpoint.routePoints, newPoint],
     splits: splitUpdate.splits,
@@ -628,7 +929,7 @@ export function processGpsLocationSample(
     splitElevationGainMeters: splitUpdate.splitElevationGainMeters,
     lastMovementOrStepAt: timestamp,
     calibGpsMeters: highQualityFix
-      ? checkpoint.calibGpsMeters + stepDist
+      ? checkpoint.calibGpsMeters + netAddedDist
       : checkpoint.calibGpsMeters,
   };
 
@@ -643,7 +944,7 @@ export function processGpsLocationSample(
   return {
     checkpoint: updatedCheckpoint,
     acceptedPoint: true,
-    didAutoPause,
+    didAutoPause: false,
     didAutoResume,
     latestCoords: coords,
   };
@@ -653,7 +954,7 @@ export function applyHardwareStepsToCheckpoint(
   inputCheckpoint: ActiveWorkoutCheckpoint,
   rawStepDelta: number,
   now: number,
-  calibratedStrides?: Partial<Record<WorkoutType, number>>,
+  calibratedStrides?: CalibratedStrideProfile,
   options?: { isBackgroundReconcile?: boolean }
 ): {
   checkpoint: ActiveWorkoutCheckpoint;
@@ -689,21 +990,35 @@ export function applyHardwareStepsToCheckpoint(
     }
   }
 
-  const stride = resolveStrideMeters(checkpoint.type, calibratedStrides);
+  const nextRecentEvents = !options?.isBackgroundReconcile
+    ? appendStepEvent(checkpoint.recentStepEvents, now, effectiveAddedSteps)
+    : checkpoint.recentStepEvents;
   const dtSec = Math.max(0.5, (now - checkpoint.lastStepSyncTimestamp) / 1000);
+  const liveCadence = computeLiveCadenceSpm(nextRecentEvents, now);
+  const strideCadence =
+    liveCadence > 0
+      ? liveCadence
+      : dtSec >= 1 && dtSec <= 15 && effectiveAddedSteps >= 2
+      ? Math.round((effectiveAddedSteps / dtSec) * 60)
+      : 0;
+  const stride = resolveStrideMeters(checkpoint.type, calibratedStrides, strideCadence);
 
   if (checkpoint.trackingMode === 'indoor') {
     const addedDist = effectiveAddedSteps * stride;
     const nextDist = checkpoint.distanceMeters + addedDist;
-    const instantSpeedMps = addedDist / dtSec;
-    const rawPace =
-      instantSpeedMps >= WORKOUT_CONFIG.autoPauseSpeedMps ? 1000 / instantSpeedMps : 0;
-    const nextPace =
-      rawPace >= MIN_PLAUSIBLE_PACE_SEC_PER_KM && rawPace <= MAX_PLAUSIBLE_PACE_SEC_PER_KM
-        ? checkpoint.smoothedCurrentPaceSeconds > 0
-          ? Math.round(checkpoint.smoothedCurrentPaceSeconds * 0.65 + rawPace * 0.35)
-          : Math.round(rawPace)
-        : checkpoint.smoothedCurrentPaceSeconds;
+    const pedometerSpeedMps =
+      liveCadence > 0 ? (liveCadence / 60) * stride : addedDist / dtSec;
+    const nextPace = computeFusedPaceSeconds({
+      prevSmoothedPace: checkpoint.smoothedCurrentPaceSeconds,
+      gpsSpeedMps: null,
+      gpsAccuracyMeters: null,
+      gpsAgeMs: Number.POSITIVE_INFINITY,
+      recentPoints: [],
+      pedometerActive: true,
+      lastHardwareStepAt: now,
+      pedometerSpeedMps,
+      now,
+    });
 
     const splitUpdate = advanceSplitsIncremental(
       checkpoint.splits,
@@ -728,12 +1043,80 @@ export function applyHardwareStepsToCheckpoint(
       fallbackBgStepsAdded: nextFallbackBg,
       lastMovementOrStepAt: now,
       lastStepSyncTimestamp: now,
+      lastHardwareStepAt: now,
+      recentStepEvents: nextRecentEvents,
     };
 
     return { checkpoint, didAutoResume };
   }
 
-  // Outdoor mode: kalibrasi panjang langkah nyata bila akurasi GPS bagus
+  // Outdoor mode: bridge blackout terowongan bila GPS terputus >= gpsDropoutBridgeDelayMs
+  const lastGpsAge =
+    checkpoint.lastAcceptedGpsAt != null
+      ? Math.max(0, now - checkpoint.lastAcceptedGpsAt)
+      : 0;
+  const shouldBridgeBlackout =
+    !options?.isBackgroundReconcile &&
+    effectiveAddedSteps > 0 &&
+    checkpoint.lastAcceptedGpsAt != null &&
+    checkpoint.lastAnchoredPoint != null &&
+    lastGpsAge >= WORKOUT_CONFIG.gpsDropoutBridgeDelayMs;
+
+  if (shouldBridgeBlackout) {
+    const bridgeDist = effectiveAddedSteps * stride;
+    const nextDist = checkpoint.distanceMeters + bridgeDist;
+    const prevBridged = checkpoint.bridgedMetersSinceLastGps ?? 0;
+    const prevBridgedSec = checkpoint.bridgedSplitSecondsSinceLastGps ?? 0;
+    const maxBlackoutSec = Math.max(0, lastGpsAge / 1000);
+    const safeSplitDtSec = Math.min(dtSec, Math.max(0, maxBlackoutSec - prevBridgedSec));
+    const splitUpdate = advanceSplitsIncremental(
+      checkpoint.splits,
+      checkpoint.splitProgressMeters,
+      checkpoint.splitProgressSeconds,
+      checkpoint.splitElevationGainMeters,
+      bridgeDist,
+      safeSplitDtSec,
+      0
+    );
+    const pedometerSpeedMps =
+      liveCadence > 0
+        ? (liveCadence / 60) * stride
+        : bridgeDist / Math.max(1, dtSec);
+    const nextPace = computeFusedPaceSeconds({
+      prevSmoothedPace: checkpoint.smoothedCurrentPaceSeconds,
+      gpsSpeedMps: null,
+      gpsAccuracyMeters: null,
+      gpsAgeMs: Number.POSITIVE_INFINITY,
+      recentPoints: [],
+      pedometerActive: true,
+      lastHardwareStepAt: now,
+      pedometerSpeedMps,
+      now,
+    });
+
+    checkpoint = {
+      ...checkpoint,
+      steps: checkpoint.steps + effectiveAddedSteps,
+      distanceMeters: nextDist,
+      smoothedCurrentPaceSeconds: nextPace,
+      splits: splitUpdate.splits,
+      splitProgressMeters: splitUpdate.splitProgressMeters,
+      splitProgressSeconds: splitUpdate.splitProgressSeconds,
+      splitElevationGainMeters: splitUpdate.splitElevationGainMeters,
+      bridgedMetersSinceLastGps: prevBridged + bridgeDist,
+      bridgedSplitSecondsSinceLastGps: prevBridgedSec + safeSplitDtSec,
+      distanceAtLastStepEvent: nextDist,
+      fallbackBgStepsAdded: nextFallbackBg,
+      lastMovementOrStepAt: now,
+      lastStepSyncTimestamp: now,
+      lastHardwareStepAt: now,
+      recentStepEvents: nextRecentEvents,
+    };
+
+    return { checkpoint, didAutoResume };
+  }
+
+  // Outdoor normal: kalibrasi panjang langkah nyata & jaga event cadence tetap segar
   checkpoint = {
     ...checkpoint,
     steps: checkpoint.steps + effectiveAddedSteps,
@@ -741,6 +1124,8 @@ export function applyHardwareStepsToCheckpoint(
     fallbackBgStepsAdded: nextFallbackBg,
     lastMovementOrStepAt: now,
     lastStepSyncTimestamp: now,
+    lastHardwareStepAt: now,
+    recentStepEvents: nextRecentEvents,
     calibHwSteps:
       !options?.isBackgroundReconcile
         ? checkpoint.calibHwSteps + effectiveAddedSteps
@@ -754,7 +1139,7 @@ export function reconcileTotalHardwareStepsToCheckpoint(
   inputCheckpoint: ActiveWorkoutCheckpoint,
   totalNativeSteps: number,
   now: number,
-  calibratedStrides?: Partial<Record<WorkoutType, number>>,
+  calibratedStrides?: CalibratedStrideProfile,
   options?: {
     isBackgroundReconcile?: boolean;
     stepTimestampMs?: number;

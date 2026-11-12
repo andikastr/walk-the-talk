@@ -5,6 +5,7 @@ import * as WorkoutPedometer from '@/modules/workout-pedometer';
 import type { StepEventSubscription } from '@/modules/workout-pedometer';
 import {
   ActiveWorkoutCheckpoint,
+  CalibratedStrideProfile,
   GpsSignalQuality,
   GPSCoordinate,
   StepTrackingMode,
@@ -34,6 +35,8 @@ import {
   applyFallbackStepsToCheckpoint,
   applyManualPause,
   applyManualResume,
+  applyStationaryPaceDecay,
+  classifyCadenceBand,
   createInitialCheckpoint,
   evaluateIdleAutoPause,
   getElapsedActiveSeconds,
@@ -70,7 +73,7 @@ function getCheckpointSessionId(
 function reconcileSnapshotOntoRecordingCheckpoint(
   checkpoint: ActiveWorkoutCheckpoint,
   snapshot: WorkoutPedometer.PedometerSessionSnapshot | null,
-  strides: Partial<Record<WorkoutType, number>>,
+  strides: CalibratedStrideProfile,
   now: number
 ): ActiveWorkoutCheckpoint {
   if (
@@ -136,9 +139,7 @@ export function useWorkoutSession() {
   const [hasPedometerPermission, setHasPedometerPermission] = useState<boolean | null>(
     null
   );
-  const [calibratedStrides, setCalibratedStrides] = useState<
-    Partial<Record<WorkoutType, number>>
-  >({});
+  const [calibratedStrides, setCalibratedStrides] = useState<CalibratedStrideProfile>({});
   const [pendingRecovery, setPendingRecovery] =
     useState<ActiveWorkoutCheckpoint | null>(null);
 
@@ -148,7 +149,7 @@ export function useWorkoutSession() {
   const trackingModeRef = useRef<TrackingMode>('outdoor');
   const weightKgRef = useRef<number>(weightKg);
   const autoPauseEnabledRef = useRef<boolean>(autoPauseEnabled);
-  const calibratedStridesRef = useRef<Partial<Record<WorkoutType, number>>>({});
+  const calibratedStridesRef = useRef<CalibratedStrideProfile>({});
   const appStateRef = useRef<string>(AppState.currentState ?? 'active');
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -251,20 +252,37 @@ export function useWorkoutSession() {
       return;
     }
 
-    const elapsedSec = getElapsedActiveSeconds(cp, now);
-    setDurationSeconds(elapsedSec);
-    setAvgPaceSeconds(calculatePaceSeconds(cp.distanceMeters, elapsedSec));
-    setCaloriesKcal(
-      estimateCalories(cp.type, elapsedSec, cp.distanceMeters, cp.weightKg || weightKgRef.current, {
-        elevationGainMeters: cp.elevationGainMeters,
-        isIndoor: cp.trackingMode === 'indoor',
-        splits: cp.splits,
-      })
+    const decayedCp = applyStationaryPaceDecay(
+      cp,
+      now,
+      pedometerActiveRef.current && appStateRef.current === 'active'
     );
-    setAvgCadenceSpm(calculateCadenceSpm(cp.steps, elapsedSec));
+    const activeCp = decayedCp;
+    if (decayedCp !== cp) {
+      checkpointRef.current = decayedCp;
+      setCurrentPaceSeconds(0);
+    }
+
+    const elapsedSec = getElapsedActiveSeconds(activeCp, now);
+    setDurationSeconds(elapsedSec);
+    setAvgPaceSeconds(calculatePaceSeconds(activeCp.distanceMeters, elapsedSec));
+    setCaloriesKcal(
+      estimateCalories(
+        activeCp.type,
+        elapsedSec,
+        activeCp.distanceMeters,
+        activeCp.weightKg || weightKgRef.current,
+        {
+          elevationGainMeters: activeCp.elevationGainMeters,
+          isIndoor: activeCp.trackingMode === 'indoor',
+          splits: activeCp.splits,
+        }
+      )
+    );
+    setAvgCadenceSpm(calculateCadenceSpm(activeCp.steps, elapsedSec));
 
     if (now - lastCheckpointSavedAtRef.current >= WORKOUT_CONFIG.checkpointIntervalMs) {
-      void persistCheckpointIfDue(cp, false);
+      void persistCheckpointIfDue(activeCp, false);
     }
   }, [applyCheckpointToUi, persistCheckpointIfDue]);
 
@@ -445,8 +463,9 @@ export function useWorkoutSession() {
         return;
       }
 
-      const allowFallback =
-        !pedometerActiveRef.current || appStateRef.current !== 'active';
+      const liveForegroundPedometer =
+        pedometerActiveRef.current && appStateRef.current === 'active';
+      const allowFallback = !liveForegroundPedometer;
 
       let nextCp = currentCp;
       let changed = false;
@@ -454,9 +473,15 @@ export function useWorkoutSession() {
       for (const loc of sorted) {
         const res = processGpsLocationSample(nextCp, loc, {
           allowFallbackSteps: allowFallback,
+          pedometerActive: liveForegroundPedometer,
           calibratedStrides: calibratedStridesRef.current,
         });
-        if (res.acceptedPoint || res.didAutoPause || res.didAutoResume) {
+        if (
+          res.acceptedPoint ||
+          res.didAutoPause ||
+          res.didAutoResume ||
+          res.checkpoint.smoothedCurrentPaceSeconds !== nextCp.smoothedCurrentPaceSeconds
+        ) {
           changed = true;
         }
         nextCp = res.checkpoint;
@@ -822,7 +847,14 @@ export function useWorkoutSession() {
 
     try {
       const measuredStride = cp.calibGpsMeters / cp.calibHwSteps;
-      const updatedStrides = await saveCalibratedStride(cp.type, measuredStride);
+      const elapsedSec = getElapsedActiveSeconds(cp, Date.now());
+      const avgCadence = calculateCadenceSpm(cp.steps, elapsedSec);
+      const cadenceBand = avgCadence > 0 ? classifyCadenceBand(avgCadence) : undefined;
+      const updatedStrides = await saveCalibratedStride(
+        cp.type,
+        measuredStride,
+        cadenceBand
+      );
       setCalibratedStrides(updatedStrides);
       calibratedStridesRef.current = updatedStrides;
     } catch {
