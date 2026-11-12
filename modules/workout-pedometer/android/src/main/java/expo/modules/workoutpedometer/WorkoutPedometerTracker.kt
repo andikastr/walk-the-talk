@@ -210,8 +210,9 @@ class WorkoutPedometerTracker private constructor(context: Context) : SensorEven
   }
 
   suspend fun flushAndReadSnapshot(timeoutMs: Long = 180L): StepSnapshot {
+    val manager = sensorManager
     val deferredToAwait: CompletableDeferred<Unit>? = synchronized(stateLock) {
-      if (!config.isRecording || !isSensorRegistered || sensorManager == null) {
+      if (!config.isRecording || !isSensorRegistered || manager == null) {
         null
       } else {
         val current = pendingFlush
@@ -220,7 +221,7 @@ class WorkoutPedometerTracker private constructor(context: Context) : SensorEven
         } else {
           val created = CompletableDeferred<Unit>()
           pendingFlush = created
-          val triggered = runCatching { sensorManager.flush(this) }.getOrDefault(false)
+          val triggered = runCatching { manager.flush(this) }.getOrDefault(false)
           if (!triggered) {
             created.complete(Unit)
             pendingFlush = null
@@ -325,10 +326,12 @@ class WorkoutPedometerTracker private constructor(context: Context) : SensorEven
   }
 
   private fun registerSensorLocked() {
-    if (isSensorRegistered || stepSensor == null || sensorManager == null) return
-    val ok = sensorManager.registerListener(
+    val manager = sensorManager
+    val sensor = stepSensor
+    if (isSensorRegistered || sensor == null || manager == null) return
+    val ok = manager.registerListener(
       this,
-      stepSensor,
+      sensor,
       SensorManager.SENSOR_DELAY_NORMAL,
       0,
       mainHandler
@@ -337,13 +340,14 @@ class WorkoutPedometerTracker private constructor(context: Context) : SensorEven
   }
 
   private fun unregisterSensorLocked() {
-    if (!isSensorRegistered || sensorManager == null) {
+    val manager = sensorManager
+    if (!isSensorRegistered || manager == null) {
       pendingFlush?.complete(Unit)
       pendingFlush = null
       isSensorRegistered = false
       return
     }
-    sensorManager.unregisterListener(this)
+    manager.unregisterListener(this)
     isSensorRegistered = false
     pendingFlush?.complete(Unit)
     pendingFlush = null
