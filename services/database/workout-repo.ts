@@ -41,6 +41,7 @@ const WORKOUT_SUMMARY_SELECT_COLUMNS = `id, type, title, start_time as startTime
             soundtrack_track_name as soundtrackTrackName, soundtrack_artist as soundtrackArtist,
             COALESCE(steps, 0) as steps, COALESCE(avg_cadence_spm, 0) as avgCadenceSpm,
             COALESCE(elevation_gain_meters, 0) as elevationGainMeters,
+            COALESCE(floors_climbed, 0) as floorsClimbed,
             COALESCE(is_indoor, 0) as isIndoorRaw`;
 
 export type WorkoutSummary = Omit<WorkoutRecord, 'routePoints' | 'splits'>;
@@ -88,6 +89,7 @@ function mapWorkoutSummaryRow(row: any): WorkoutSummary {
   return {
     ...rest,
     isIndoor: Boolean(isIndoorRaw),
+    floorsClimbed: Number(row.floorsClimbed ?? 0),
   };
 }
 
@@ -284,6 +286,7 @@ async function initDatabase(db: SQLite.SQLiteDatabase): Promise<void> {
   await ensureColumn('workouts', 'steps', 'INTEGER DEFAULT 0');
   await ensureColumn('workouts', 'avg_cadence_spm', 'INTEGER DEFAULT 0');
   await ensureColumn('workouts', 'elevation_gain_meters', 'REAL DEFAULT 0');
+  await ensureColumn('workouts', 'floors_climbed', 'INTEGER DEFAULT 0');
   await ensureColumn('workouts', 'is_indoor', 'INTEGER DEFAULT 0');
   await ensureColumn('workout_points', 'segment_index', 'INTEGER DEFAULT 0');
   await ensureColumn('workout_splits', 'elevation_gain_meters', 'REAL DEFAULT 0');
@@ -300,8 +303,8 @@ export async function saveWorkout(workout: WorkoutRecord): Promise<void> {
 
     await db.withTransactionAsync(async () => {
       await db.runAsync(
-        `INSERT INTO workouts (id, type, title, start_time, end_time, duration_seconds, distance_meters, avg_pace_seconds, calories_kcal, soundtrack_track_name, soundtrack_artist, steps, avg_cadence_spm, elevation_gain_meters, is_indoor)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+        `INSERT INTO workouts (id, type, title, start_time, end_time, duration_seconds, distance_meters, avg_pace_seconds, calories_kcal, soundtrack_track_name, soundtrack_artist, steps, avg_cadence_spm, elevation_gain_meters, floors_climbed, is_indoor)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
         [
           workout.id,
           workout.type,
@@ -317,6 +320,7 @@ export async function saveWorkout(workout: WorkoutRecord): Promise<void> {
           workout.steps ?? 0,
           workout.avgCadenceSpm ?? 0,
           Math.round(workout.elevationGainMeters ?? 0),
+          workout.floorsClimbed ?? 0,
           workout.isIndoor ? 1 : 0,
         ]
       );
@@ -562,7 +566,8 @@ export async function getWorkoutStats(): Promise<WorkoutStats> {
        COALESCE(SUM(duration_seconds), 0) as totalDurationSeconds,
        COUNT(id) as totalWorkouts,
        COALESCE(SUM(calories_kcal), 0) as totalCaloriesKcal,
-       COALESCE(SUM(steps), 0) as totalSteps
+       COALESCE(SUM(steps), 0) as totalSteps,
+       COALESCE(SUM(floors_climbed), 0) as totalFloors
      FROM workouts;`
   );
 
@@ -572,6 +577,7 @@ export async function getWorkoutStats(): Promise<WorkoutStats> {
     totalWorkouts: res?.totalWorkouts || 0,
     totalCaloriesKcal: res?.totalCaloriesKcal || 0,
     totalSteps: res?.totalSteps || 0,
+    totalFloorsClimbed: res?.totalFloors || 0,
   };
 }
 

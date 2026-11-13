@@ -8,6 +8,7 @@ import {
   CalibratedStrideProfile,
   GpsSignalQuality,
   GPSCoordinate,
+  MotionActivityType,
   StepTrackingMode,
   TrackingMode,
   WorkoutRecord,
@@ -32,6 +33,7 @@ import {
   saveWorkout as saveWorkoutToDb,
 } from '@/services/database/workout-repo';
 import {
+  applyBarometricMeasurementToCheckpoint,
   applyFallbackStepsToCheckpoint,
   applyManualPause,
   applyManualResume,
@@ -59,6 +61,7 @@ import {
   normalizeWorkoutSoundtracks,
 } from '@/services/spotify/workout-soundtrack';
 import { startCompassHeadingWatcher } from '@/services/sensors/compass';
+import { startBarometerWatcher } from '@/services/sensors/barometer';
 
 export type { StepTrackingMode };
 
@@ -125,6 +128,9 @@ export function useWorkoutSession() {
   const [steps, setSteps] = useState<number>(0);
   const [avgCadenceSpm, setAvgCadenceSpm] = useState<number>(0);
   const [elevationGainMeters, setElevationGainMeters] = useState<number>(0);
+  const [floorsClimbed, setFloorsClimbed] = useState<number>(0);
+  const [isVehicleDetected, setIsVehicleDetected] = useState<boolean>(false);
+  const [motionActivity, setMotionActivity] = useState<MotionActivityType>('still');
   const [stepTrackingMode, setStepTrackingMode] = useState<StepTrackingMode>('fallback');
   const [routeCoordinates, setRouteCoordinates] = useState<GPSCoordinate[]>([]);
   const [splits, setSplits] = useState<WorkoutSplit[]>([]);
@@ -159,6 +165,7 @@ export function useWorkoutSession() {
   const idleLocationSubRef = useRef<Location.LocationSubscription | null>(null);
   const activeLocationSubRef = useRef<Location.LocationSubscription | null>(null);
   const compassUnsubRef = useRef<(() => void) | null>(null);
+  const barometerUnsubRef = useRef<(() => void) | null>(null);
   const pedometerSubRef = useRef<StepEventSubscription | null>(null);
 
   const pedometerActiveRef = useRef<boolean>(false);
@@ -214,6 +221,9 @@ export function useWorkoutSession() {
       setSteps(cp.steps);
       setAvgCadenceSpm(cadence);
       setElevationGainMeters(Math.round(cp.elevationGainMeters));
+      setFloorsClimbed(cp.floorsClimbed ?? 0);
+      setIsVehicleDetected(Boolean(cp.isVehicleDetected));
+      setMotionActivity(cp.motionActivity ?? 'still');
       setRouteCoordinates(cp.routePoints);
       setSplits(cp.splits);
       setSessionSoundtracks(cp.soundtracks ?? []);
@@ -496,6 +506,53 @@ export function useWorkoutSession() {
       stopCompass();
     };
   }, [isAppActive, status, trackingMode, hasLocationPermission]);
+
+  // Pantau sensor Barometer / Altimeter untuk elevasi presisi tinggi & hitungan lantai (Floors Climbed)
+  useEffect(() => {
+    let cancelled = false;
+
+    const stopBarometer = () => {
+      if (barometerUnsubRef.current) {
+        barometerUnsubRef.current();
+        barometerUnsubRef.current = null;
+      }
+    };
+
+    if (status !== 'recording' || !isAppActive || Platform.OS === 'web') {
+      stopBarometer();
+      return stopBarometer;
+    }
+
+    (async () => {
+      try {
+        const unsub = await startBarometerWatcher((sample) => {
+          if (cancelled || !checkpointRef.current) return;
+          const nextCp = applyBarometricMeasurementToCheckpoint(
+            checkpointRef.current,
+            sample.addedGainMeters,
+            sample.floorsClimbed
+          );
+          checkpointRef.current = nextCp;
+          setFloorsClimbed(nextCp.floorsClimbed ?? sample.floorsClimbed);
+          if (sample.addedGainMeters > 0) {
+            setElevationGainMeters(Math.round(nextCp.elevationGainMeters));
+          }
+        });
+        if (cancelled) {
+          unsub();
+        } else {
+          barometerUnsubRef.current = unsub;
+        }
+      } catch {
+        // Abaikan jika barometer tidak tersedia di perangkat
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      stopBarometer();
+    };
+  }, [status, isAppActive]);
 
   // Proses batch GPS dari foreground watcher atau background task
   const handleLocationBatch = useCallback(
@@ -889,6 +946,10 @@ export function useWorkoutSession() {
         compassUnsubRef.current();
         compassUnsubRef.current = null;
       }
+      if (barometerUnsubRef.current) {
+        barometerUnsubRef.current();
+        barometerUnsubRef.current = null;
+      }
       if (pedometerSubRef.current) {
         pedometerSubRef.current.remove();
         pedometerSubRef.current = null;
@@ -1127,6 +1188,9 @@ export function useWorkoutSession() {
     setSessionSoundtracks([]);
     setWorkoutStartTime(null);
     setCurrentHeading(null);
+    setFloorsClimbed(0);
+    setIsVehicleDetected(false);
+    setMotionActivity('still');
   }, [detachPedometerListener, stopOutdoorGpsTracking]);
 
   // RESTORE CRASH RECOVERY CHECKPOINT
@@ -1281,6 +1345,8 @@ export function useWorkoutSession() {
         steps: finalSteps,
         avgCadenceSpm: calculateCadenceSpm(finalSteps, finalDuration),
         elevationGainMeters: Math.round(cp?.elevationGainMeters ?? elevationGainMeters),
+        floorsClimbed: cp?.floorsClimbed ?? floorsClimbed,
+        motionActivity: cp?.motionActivity ?? motionActivity,
         isIndoor: (cp?.trackingMode ?? trackingModeRef.current) === 'indoor',
       };
 
@@ -1292,6 +1358,8 @@ export function useWorkoutSession() {
       distanceMeters,
       durationSeconds,
       elevationGainMeters,
+      floorsClimbed,
+      motionActivity,
       resetWorkout,
       routeCoordinates,
       sessionSoundtracks,
@@ -1324,6 +1392,9 @@ export function useWorkoutSession() {
     steps,
     avgCadenceSpm,
     elevationGainMeters,
+    floorsClimbed,
+    isVehicleDetected,
+    motionActivity,
     stepTrackingMode,
     routeCoordinates,
     splits,

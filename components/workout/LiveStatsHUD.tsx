@@ -19,6 +19,7 @@ interface LiveStatsHUDProps {
   steps?: number;
   cadenceSpm?: number;
   elevationGainMeters?: number;
+  floorsClimbed?: number;
   trackingMode?: TrackingMode;
   stepTrackingMode?: StepTrackingMode;
 }
@@ -36,6 +37,7 @@ export function LiveStatsHUD({
   steps = 0,
   cadenceSpm = 0,
   elevationGainMeters = 0,
+  floorsClimbed = 0,
   trackingMode = 'outdoor',
   stepTrackingMode = 'fallback',
 }: LiveStatsHUDProps) {
@@ -154,7 +156,7 @@ export function LiveStatsHUD({
           </Text>
         </View>
 
-        {trackingMode === 'outdoor' && (
+        {trackingMode === 'outdoor' ? (
           <>
             <View style={[styles.vertDivider, { backgroundColor: palette.border }]} />
             <View style={styles.metricItem}>
@@ -163,10 +165,32 @@ export function LiveStatsHUD({
               </Text>
               <Text style={[styles.metricValue, { color: palette.onSurface }]}>
                 {formatElevationMeters(elevationGainMeters)}
+                {floorsClimbed > 0 ? (
+                  <Text style={[styles.subUnit, { color: palette.onSurfaceVariant }]}>
+                    {' '}
+                    ({floorsClimbed} {t.hud.floors.toLowerCase()})
+                  </Text>
+                ) : null}
               </Text>
             </View>
           </>
-        )}
+        ) : floorsClimbed > 0 ? (
+          <>
+            <View style={[styles.vertDivider, { backgroundColor: palette.border }]} />
+            <View style={styles.metricItem}>
+              <Text style={[styles.metricLabel, { color: palette.onSurfaceVariant }]}>
+                {t.hud.floors}
+              </Text>
+              <Text style={[styles.metricValue, { color: palette.onSurface }]}>
+                {floorsClimbed}
+                <Text style={[styles.subUnit, { color: palette.onSurfaceVariant }]}>
+                  {' '}
+                  {t.hud.floors.toLowerCase()}
+                </Text>
+              </Text>
+            </View>
+          </>
+        ) : null}
       </View>
     </View>
   );
