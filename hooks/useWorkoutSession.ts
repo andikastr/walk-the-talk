@@ -58,6 +58,7 @@ import {
   mergeWorkoutSoundtracks,
   normalizeWorkoutSoundtracks,
 } from '@/services/spotify/workout-soundtrack';
+import { startCompassHeadingWatcher } from '@/services/sensors/compass';
 
 export type { StepTrackingMode };
 
@@ -131,6 +132,8 @@ export function useWorkoutSession() {
   const [workoutStartTime, setWorkoutStartTime] = useState<number | null>(null);
   const [currentLocation, setCurrentLocation] =
     useState<Location.LocationObjectCoords | null>(null);
+  const [currentHeading, setCurrentHeading] = useState<number | null>(null);
+  const [isAppActive, setIsAppActive] = useState<boolean>(true);
   const [hasLocationPermission, setHasLocationPermission] = useState<boolean | null>(null);
   const [hasBackgroundPermission, setHasBackgroundPermission] = useState<boolean | null>(
     null
@@ -155,6 +158,7 @@ export function useWorkoutSession() {
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const idleLocationSubRef = useRef<Location.LocationSubscription | null>(null);
   const activeLocationSubRef = useRef<Location.LocationSubscription | null>(null);
+  const compassUnsubRef = useRef<(() => void) | null>(null);
   const pedometerSubRef = useRef<StepEventSubscription | null>(null);
 
   const pedometerActiveRef = useRef<boolean>(false);
@@ -442,6 +446,57 @@ export function useWorkoutSession() {
     };
   }, [status, trackingMode, hasLocationPermission]);
 
+  // Pantau kompas digital (magnetometer) di foreground untuk arah hadap peta (Vision Cone)
+  useEffect(() => {
+    let cancelled = false;
+
+    const stopCompass = () => {
+      if (compassUnsubRef.current) {
+        compassUnsubRef.current();
+        compassUnsubRef.current = null;
+      }
+    };
+
+    if (
+      !isAppActive ||
+      status === 'completed' ||
+      trackingMode !== 'outdoor' ||
+      hasLocationPermission !== true ||
+      Platform.OS === 'web'
+    ) {
+      stopCompass();
+      const timer = setTimeout(() => {
+        setCurrentHeading((prev) => (prev !== null ? null : prev));
+      }, 0);
+      return () => {
+        clearTimeout(timer);
+        stopCompass();
+      };
+    }
+
+    (async () => {
+      try {
+        const unsub = await startCompassHeadingWatcher((deg) => {
+          if (!cancelled) {
+            setCurrentHeading(deg);
+          }
+        });
+        if (cancelled) {
+          unsub();
+        } else {
+          compassUnsubRef.current = unsub;
+        }
+      } catch {
+        // Abaikan jika sensor kompas tidak tersedia di perangkat
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      stopCompass();
+    };
+  }, [isAppActive, status, trackingMode, hasLocationPermission]);
+
   // Proses batch GPS dari foreground watcher atau background task
   const handleLocationBatch = useCallback(
     (locations: Location.LocationObject[]) => {
@@ -581,6 +636,7 @@ export function useWorkoutSession() {
       appStateRef.current = nextState;
 
       if (nextState !== 'active' && prevState === 'active') {
+        setIsAppActive(false);
         if (
           checkpointRef.current &&
           (statusRef.current === 'recording' || statusRef.current === 'paused')
@@ -590,6 +646,7 @@ export function useWorkoutSession() {
       }
 
       if (nextState === 'active') {
+        setIsAppActive(true);
         void refreshLocationPermission(false);
         void WorkoutPedometer.getPermissionsAsync()
           .then((perm) => setHasPedometerPermission(perm.granted))
@@ -828,6 +885,10 @@ export function useWorkoutSession() {
         idleLocationSubRef.current.remove();
         idleLocationSubRef.current = null;
       }
+      if (compassUnsubRef.current) {
+        compassUnsubRef.current();
+        compassUnsubRef.current = null;
+      }
       if (pedometerSubRef.current) {
         pedometerSubRef.current.remove();
         pedometerSubRef.current = null;
@@ -1065,6 +1126,7 @@ export function useWorkoutSession() {
     setSplits([]);
     setSessionSoundtracks([]);
     setWorkoutStartTime(null);
+    setCurrentHeading(null);
   }, [detachPedometerListener, stopOutdoorGpsTracking]);
 
   // RESTORE CRASH RECOVERY CHECKPOINT
@@ -1268,6 +1330,7 @@ export function useWorkoutSession() {
     sessionSoundtracks,
     workoutStartTime,
     currentLocation,
+    currentHeading,
     gpsSignal,
     gpsAccuracyMeters,
     hasLocationPermission,

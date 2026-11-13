@@ -63,6 +63,7 @@ export default function RecordScreen() {
     sessionSoundtracks,
     workoutStartTime,
     currentLocation,
+    currentHeading,
     gpsSignal,
     gpsAccuracyMeters,
     hasLocationPermission,
@@ -666,6 +667,7 @@ export default function RecordScreen() {
           >
             <WorkoutMap
               currentLocation={currentLocation}
+              headingDegrees={currentHeading}
               routeCoordinates={routeCoordinates}
               isTracking={status === 'recording' && !isAutoPaused}
             />

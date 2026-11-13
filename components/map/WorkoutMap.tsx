@@ -12,6 +12,7 @@ interface WorkoutMapProps {
   currentLocation: { latitude: number; longitude: number } | null;
   routeCoordinates: GPSCoordinate[];
   isTracking?: boolean;
+  headingDegrees?: number | null;
 }
 
 const DEFAULT_COORD = { latitude: -6.2088, longitude: 106.8456 };
@@ -65,6 +66,10 @@ function buildLeafletHtml(
     }
     .leaflet-container {
       background: transparent !important;
+    }
+    .user-cone-div-icon {
+      background: transparent !important;
+      border: none !important;
     }
     .osm-dark-fallback {
       filter: brightness(0.6) invert(1) contrast(2.6) hue-rotate(200deg) saturate(0.35) brightness(0.75);
@@ -180,11 +185,15 @@ function buildLeafletHtml(
       var endMarker = null;
       var userHalo = null;
       var userDot = null;
+      var userConeMarker = null;
       var hasAutoFocused = false;
 
       window.__updateMapState = function (payload) {
         if (!payload) return;
         var loc = payload.currentLocation;
+        var heading = typeof payload.headingDegrees === 'number' && isFinite(payload.headingDegrees)
+          ? payload.headingDegrees
+          : null;
         var coords = payload.routeCoordinates || [];
         var segments = payload.routeSegments || [];
         var drawableSegments = segments.filter(function (seg) { return seg.length > 1; });
@@ -247,7 +256,7 @@ function buildLeafletHtml(
           endMarker = null;
         }
 
-        // Current User GPS Location Dot (shown during tracking or before workout starts)
+        // Current User GPS Location Dot & Directional Vision Cone
         var showUserDot = !!loc && (isTracking || coords.length <= 1);
         if (showUserDot) {
           var userLatLng = [loc.latitude, loc.longitude];
@@ -269,9 +278,40 @@ function buildLeafletHtml(
             userHalo.setLatLng(userLatLng);
             userDot.setLatLng(userLatLng);
           }
+
+          // Vision Cone (Heading Beam)
+          if (heading !== null) {
+            var coneRotation = Math.round(heading);
+            if (!userConeMarker) {
+              var coneIcon = L.divIcon({
+                className: 'user-cone-div-icon',
+                iconSize: [72, 72],
+                iconAnchor: [36, 36],
+                html: '<div class="user-heading-cone" style="width:72px;height:72px;transform-origin:36px 36px;transform:rotate(' + coneRotation + 'deg);pointer-events:none;transition:transform 0.18s cubic-bezier(0.25,0.1,0.25,1);"><svg width="72" height="72" viewBox="0 0 72 72"><defs><radialGradient id="coneGrad" cx="50%" cy="50%" r="50%" fx="50%" fy="50%"><stop offset="0%" stop-color="${palette.accent}" stop-opacity="0.45"/><stop offset="65%" stop-color="${palette.accent}" stop-opacity="0.16"/><stop offset="100%" stop-color="${palette.accent}" stop-opacity="0"/></radialGradient></defs><path d="M 36 36 L 24 5 A 34 34 0 0 1 48 5 Z" fill="url(#coneGrad)"/><path d="M 36 36 L 36 12" stroke="${palette.accent}" stroke-width="1.8" stroke-linecap="round" opacity="0.85"/></svg></div>'
+              });
+              userConeMarker = L.marker(userLatLng, {
+                icon: coneIcon,
+                interactive: false,
+                zIndexOffset: -10
+              }).addTo(map);
+            } else {
+              userConeMarker.setLatLng(userLatLng);
+              var el = userConeMarker.getElement();
+              if (el) {
+                var inner = el.querySelector('.user-heading-cone');
+                if (inner) {
+                  inner.style.transform = 'rotate(' + coneRotation + 'deg)';
+                }
+              }
+            }
+          } else if (userConeMarker) {
+            map.removeLayer(userConeMarker);
+            userConeMarker = null;
+          }
         } else {
           if (userHalo) { map.removeLayer(userHalo); userHalo = null; }
           if (userDot) { map.removeLayer(userDot); userDot = null; }
+          if (userConeMarker) { map.removeLayer(userConeMarker); userConeMarker = null; }
         }
 
         // Camera Focus
@@ -318,7 +358,12 @@ function buildLeafletHtml(
 </html>`;
 }
 
-export function WorkoutMap({ currentLocation, routeCoordinates, isTracking }: WorkoutMapProps) {
+export function WorkoutMap({
+  currentLocation,
+  routeCoordinates,
+  isTracking,
+  headingDegrees,
+}: WorkoutMapProps) {
   const { palette, isDark, language, t } = usePreferences();
   const webViewRef = useRef<WebView<WebViewProps> | null>(null);
   const isMapReadyRef = useRef(false);
@@ -361,12 +406,16 @@ export function WorkoutMap({ currentLocation, routeCoordinates, isTracking }: Wo
 
     return {
       currentLocation,
+      headingDegrees:
+        typeof headingDegrees === 'number' && Number.isFinite(headingDegrees)
+          ? headingDegrees
+          : null,
       routeCoordinates: flatCoords,
       routeSegments,
       isTracking: Boolean(isTracking),
       forceFit: false,
     };
-  }, [currentLocation, routeCoordinates, isTracking]);
+  }, [currentLocation, headingDegrees, routeCoordinates, isTracking]);
 
   const latestPayloadRef = useRef(latestPayload);
 
