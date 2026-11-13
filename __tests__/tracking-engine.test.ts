@@ -2,12 +2,14 @@ import { describe, expect, it } from '@jest/globals';
 import type * as Location from 'expo-location';
 import {
   advanceSplitsIncremental,
+  applyBarometricMeasurementToCheckpoint,
   applyFallbackStepsToCheckpoint,
   applyHardwareStepsToCheckpoint,
   applyManualPause,
   applyManualResume,
   applyStationaryPaceDecay,
   classifyCadenceBand,
+  classifyMotionActivity,
   computeFusedPaceSeconds,
   createInitialCheckpoint,
   evaluateIdleAutoPause,
@@ -576,6 +578,131 @@ describe('services/location/tracking-engine', () => {
     expect(applyStationaryPaceDecay(activeCp, now - 1000, true)).toBe(activeCp);
     const decayed = applyStationaryPaceDecay(activeCp, now, true);
     expect(decayed.smoothedCurrentPaceSeconds).toBe(0);
+  });
+
+  describe('classifyMotionActivity & Vehicle Detection', () => {
+    it('classifies vehicle when speed exceeds human running record (> 10.5 m/s)', () => {
+      const res = classifyMotionActivity({
+        speedMps: 11.2,
+        stepRateSpm: 160,
+        msSinceStep: 500,
+        dtSec: 2,
+        displacementMeters: 22.4,
+      });
+      expect(res.isVehicle).toBe(true);
+      expect(res.activity).toBe('in_vehicle');
+    });
+
+    it('classifies vehicle when moving at motorcycle speed with no foot steps', () => {
+      const res = classifyMotionActivity({
+        speedMps: 7.0, // ~25 km/h
+        pedometerActive: true,
+        stepRateSpm: 0,
+        msSinceStep: 5000,
+        dtSec: 2,
+        displacementMeters: 14,
+      });
+      expect(res.isVehicle).toBe(true);
+      expect(res.activity).toBe('in_vehicle');
+    });
+
+    it('classifies running when cadence is high or pace is fast running', () => {
+      const res = classifyMotionActivity({
+        speedMps: 3.2,
+        stepRateSpm: 165,
+        msSinceStep: 300,
+        dtSec: 2,
+        displacementMeters: 6.4,
+      });
+      expect(res.isVehicle).toBe(false);
+      expect(res.activity).toBe('running');
+    });
+
+    it('classifies walking for moderate cadence and human walking speed', () => {
+      const res = classifyMotionActivity({
+        speedMps: 1.3,
+        stepRateSpm: 110,
+        msSinceStep: 500,
+        dtSec: 2,
+        displacementMeters: 2.6,
+      });
+      expect(res.isVehicle).toBe(false);
+      expect(res.activity).toBe('walking');
+    });
+
+    it('auto-pauses and sets isVehicleDetected on vehicle motion in processGpsLocationSample', () => {
+      const start = 3_000_000;
+      let cp = createInitialCheckpoint({
+        type: 'run',
+        trackingMode: 'outdoor',
+        autoPauseEnabled: true,
+        weightKg: 70,
+        now: start,
+      });
+
+      // Anchor first point
+      const anchor = processGpsLocationSample(
+        cp,
+        makeLoc(-6.2, 106.8, start + 1000, { accuracy: 8 }),
+        { allowFallbackSteps: true }
+      );
+      cp = anchor.checkpoint;
+
+      // Second point: vehicle speed 11 m/s (~40 km/h)
+      const vehicleSample = processGpsLocationSample(
+        cp,
+        makeLoc(-6.2002, 106.8, start + 3000, { speed: 11.5, accuracy: 8 }),
+        { allowFallbackSteps: true }
+      );
+
+      expect(vehicleSample.acceptedPoint).toBe(false);
+      expect(vehicleSample.checkpoint.isVehicleDetected).toBe(true);
+      expect(vehicleSample.checkpoint.isAutoPaused).toBe(true);
+      expect(vehicleSample.checkpoint.motionActivity).toBe('in_vehicle');
+
+      // When physical steps resume (user got off motorcycle)
+      const stepResume = applyHardwareStepsToCheckpoint(
+        vehicleSample.checkpoint,
+        5,
+        start + 8000
+      );
+      expect(stepResume.checkpoint.isVehicleDetected).toBe(false);
+      expect(stepResume.checkpoint.isAutoPaused).toBe(false);
+      expect(stepResume.didAutoResume).toBe(true);
+    });
+  });
+
+  describe('applyBarometricMeasurementToCheckpoint', () => {
+    it('applies added gain and floors climbed to checkpoint', () => {
+      const cp = createInitialCheckpoint({
+        type: 'walk',
+        trackingMode: 'outdoor',
+        autoPauseEnabled: true,
+        weightKg: 65,
+        now: 1000,
+      });
+
+      const updated = applyBarometricMeasurementToCheckpoint(cp, 6.2, 2);
+      expect(updated.barometricGainMeters).toBe(6.2);
+      expect(updated.elevationGainMeters).toBe(6.2);
+      expect(updated.floorsClimbed).toBe(2);
+    });
+
+    it('ignores measurements when workout is paused', () => {
+      const cp = {
+        ...createInitialCheckpoint({
+          type: 'walk',
+          trackingMode: 'outdoor',
+          autoPauseEnabled: true,
+          weightKg: 65,
+          now: 1000,
+        }),
+        isAutoPaused: true,
+      };
+
+      const updated = applyBarometricMeasurementToCheckpoint(cp, 5.0, 1);
+      expect(updated).toBe(cp);
+    });
   });
 });
 

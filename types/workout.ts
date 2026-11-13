@@ -1,5 +1,13 @@
 export type WorkoutType = 'walk' | 'jog' | 'run';
 
+export type MotionActivityType =
+  | 'still'
+  | 'walking'
+  | 'running'
+  | 'on_bicycle'
+  | 'in_vehicle'
+  | 'unknown';
+
 export type StrideCadenceBand = 'walk' | 'jog' | 'runModerate' | 'runFast';
 
 export type CalibratedStrideProfile = Partial<Record<WorkoutType, number>> & {
@@ -56,6 +64,8 @@ export interface WorkoutRecord {
   steps?: number;
   avgCadenceSpm?: number;
   elevationGainMeters?: number;
+  floorsClimbed?: number;
+  motionActivity?: MotionActivityType;
   isIndoor?: boolean;
 }
 
@@ -65,6 +75,7 @@ export interface WorkoutStats {
   totalWorkouts: number;
   totalCaloriesKcal: number;
   totalSteps: number;
+  totalFloorsClimbed?: number;
 }
 
 export interface ActiveWorkoutCheckpoint {
@@ -74,6 +85,10 @@ export interface ActiveWorkoutCheckpoint {
   autoPauseEnabled: boolean;
   status: 'recording' | 'paused';
   isAutoPaused: boolean;
+  isVehicleDetected?: boolean;
+  motionActivity?: MotionActivityType;
+  floorsClimbed?: number;
+  barometricGainMeters?: number;
   startTime: number;
   accumulatedActiveMs: number;
   activeSegmentStartMs: number | null;

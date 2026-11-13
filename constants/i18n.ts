@@ -184,6 +184,8 @@ const idDict = {
     steps: 'LANGKAH',
     cadence: 'KADENS',
     elevation: 'ELEVASI',
+    floors: 'LANTAI',
+    vehicleWarning: 'Laju kendaraan (motor/mobil) terdeteksi. Sesi dijeda otomatis.',
   },
   splits: {
     empty: 'Belum ada data split kilometer.',
@@ -574,6 +576,8 @@ const enDict: typeof idDict = {
     steps: 'STEPS',
     cadence: 'CADENCE',
     elevation: 'ELEVATION',
+    floors: 'FLOORS',
+    vehicleWarning: 'Vehicle speed detected. Workout auto-paused.',
   },
   splits: {
     empty: 'No kilometer split data yet.',

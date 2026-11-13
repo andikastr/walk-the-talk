@@ -57,6 +57,8 @@ export default function RecordScreen() {
     steps,
     avgCadenceSpm,
     elevationGainMeters,
+    floorsClimbed,
+    isVehicleDetected,
     stepTrackingMode,
     routeCoordinates,
     splits,
@@ -605,6 +607,28 @@ export default function RecordScreen() {
         </Pressable>
       )}
 
+      {isVehicleDetected && (
+        <View
+          style={[
+            styles.vehicleAlertBanner,
+            {
+              backgroundColor: isDark
+                ? 'rgba(235, 87, 87, 0.16)'
+                : 'rgba(235, 87, 87, 0.12)',
+              borderColor: palette.accent,
+            },
+          ]}
+        >
+          <AlertTriangle size={15} strokeWidth={2} color={palette.accent} />
+          <Text
+            style={[styles.vehicleAlertText, { color: palette.accent }]}
+            numberOfLines={2}
+          >
+            {t.hud.vehicleWarning}
+          </Text>
+        </View>
+      )}
+
       {/* Center Map / Indoor Panel / Splits Frame */}
       <View style={styles.centerArea}>
         {viewMode === 'splits' ? (
@@ -686,6 +710,7 @@ export default function RecordScreen() {
           steps={steps}
           cadenceSpm={avgCadenceSpm}
           elevationGainMeters={elevationGainMeters}
+          floorsClimbed={floorsClimbed}
           trackingMode={trackingMode}
           stepTrackingMode={stepTrackingMode}
         />
@@ -856,6 +881,22 @@ const styles = StyleSheet.create({
   permissionBannerText: {
     ...TYPOGRAPHY.labelSm,
     flex: 1,
+  },
+  vehicleAlertBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: SPACING.gutter,
+    marginBottom: SPACING.sm,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+  },
+  vehicleAlertText: {
+    ...TYPOGRAPHY.labelSm,
+    flex: 1,
+    fontFamily: FONT_FAMILY.displayMedium,
   },
   centerArea: {
     flex: 1,

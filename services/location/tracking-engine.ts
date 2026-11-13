@@ -3,6 +3,7 @@ import {
   ActiveWorkoutCheckpoint,
   CalibratedStrideProfile,
   GPSCoordinate,
+  MotionActivityType,
   StrideCadenceBand,
   WorkoutSplit,
   WorkoutType,
@@ -75,6 +76,98 @@ export function resolveStrideMeters(
   return WORKOUT_CONFIG.strideMetersByType[type] || WORKOUT_CONFIG.strideMetersByType.walk;
 }
 
+export interface MotionClassificationResult {
+  activity: MotionActivityType;
+  isVehicle: boolean;
+}
+
+/**
+ * Mengklasifikasikan aktivitas gerak pengguna dan mendeteksi laju kendaraan bermotor
+ * berbasis fusi kecepatan GPS, frekuensi langkah (cadence), dan perpindahan segmen.
+ */
+export function classifyMotionActivity(params: {
+  speedMps: number | null | undefined;
+  stepRateSpm: number;
+  pedometerActive?: boolean;
+  msSinceStep: number | null;
+  dtSec: number;
+  displacementMeters: number;
+}): MotionClassificationResult {
+  const { speedMps, stepRateSpm, pedometerActive, msSinceStep, dtSec, displacementMeters } =
+    params;
+  const impliedSpeedMps = dtSec > 0 ? displacementMeters / dtSec : 0;
+  const resolvedSpeedMps =
+    typeof speedMps === 'number' && Number.isFinite(speedMps) && speedMps >= 0
+      ? speedMps
+      : impliedSpeedMps;
+
+  // 1. Deteksi kendaraan mutlak: Kecepatan melampaui batas wajar pelari manusia (> 10.5 m/s ~ 37.8 km/jam)
+  if (resolvedSpeedMps > 10.5 || impliedSpeedMps > 10.5) {
+    return { activity: 'in_vehicle', isVehicle: true };
+  }
+
+  // 2. Deteksi kendaraan berbasis sensor pedometer aktif:
+  // Sensor langkah aktif dan diam tanpa langkah (>= 4 detik), namun GPS melaju pada kecepatan kendaraan (>= 6.5 m/s ~ 23.4 km/jam)
+  const isVehicleBySilentPedometer =
+    Boolean(pedometerActive) &&
+    msSinceStep !== null &&
+    msSinceStep >= 4000 &&
+    resolvedSpeedMps >= 6.5;
+
+  if (isVehicleBySilentPedometer) {
+    return { activity: 'in_vehicle', isVehicle: true };
+  }
+
+  // 3. Lari (Running): Cadence tinggi atau perpaduan kecepatan lari + cadence
+  if (
+    stepRateSpm >= 155 ||
+    (resolvedSpeedMps >= 2.6 && (stepRateSpm >= 125 || !pedometerActive))
+  ) {
+    return { activity: 'running', isVehicle: false };
+  }
+
+  // 4. Jalan (Walking): Ada langkah kaki atau kecepatan berjalan normal
+  if (stepRateSpm > 0 || (resolvedSpeedMps >= 0.5 && resolvedSpeedMps < 2.6)) {
+    return { activity: 'walking', isVehicle: false };
+  }
+
+  // 5. Diam (Still)
+  if (resolvedSpeedMps < 0.4 && stepRateSpm === 0) {
+    return { activity: 'still', isVehicle: false };
+  }
+
+  return { activity: 'unknown', isVehicle: false };
+}
+
+/**
+ * Menerapkan data elevasi presisi tinggi dan hitungan lantai dari sensor Barometer ke checkpoint
+ */
+export function applyBarometricMeasurementToCheckpoint(
+  checkpoint: ActiveWorkoutCheckpoint,
+  addedGainMeters: number,
+  floorsClimbed: number
+): ActiveWorkoutCheckpoint {
+  if (checkpoint.status !== 'recording' || checkpoint.isAutoPaused) {
+    return checkpoint;
+  }
+
+  const safeGain = Math.max(0, addedGainMeters);
+  const nextBaroGain = (checkpoint.barometricGainMeters ?? 0) + safeGain;
+  const nextFloors = Math.max(checkpoint.floorsClimbed ?? 0, floorsClimbed);
+
+  const nextElevGain =
+    safeGain > 0
+      ? checkpoint.elevationGainMeters + safeGain
+      : checkpoint.elevationGainMeters;
+
+  return {
+    ...checkpoint,
+    elevationGainMeters: nextElevGain,
+    barometricGainMeters: nextBaroGain,
+    floorsClimbed: nextFloors,
+  };
+}
+
 export function createInitialCheckpoint({
   type,
   trackingMode,
@@ -89,6 +182,10 @@ export function createInitialCheckpoint({
     autoPauseEnabled,
     status: 'recording',
     isAutoPaused: false,
+    isVehicleDetected: false,
+    motionActivity: 'still',
+    floorsClimbed: 0,
+    barometricGainMeters: 0,
     startTime: now,
     accumulatedActiveMs: 0,
     activeSegmentStartMs: now,
@@ -148,6 +245,7 @@ export function applyManualPause(
     ...checkpoint,
     status: 'paused',
     isAutoPaused: false,
+    isVehicleDetected: false,
     accumulatedActiveMs: totalMs,
     activeSegmentStartMs: null,
     smoothedCurrentPaceSeconds: 0,
@@ -170,6 +268,8 @@ export function applyManualResume(
     ...checkpoint,
     status: 'recording',
     isAutoPaused: false,
+    isVehicleDetected: false,
+    motionActivity: checkpoint.steps > 0 ? 'walking' : 'still',
     activeSegmentStartMs: now,
     lastMovementOrStepAt: now,
     lastStepSyncTimestamp: now,
@@ -240,6 +340,8 @@ function applyAutoResumeState(
   return {
     ...checkpoint,
     isAutoPaused: false,
+    isVehicleDetected: false,
+    motionActivity: checkpoint.steps > 0 ? 'walking' : 'still',
     activeSegmentStartMs: resumeAtMs,
     lastMovementOrStepAt: resumeAtMs,
     lastStepSyncTimestamp: resumeAtMs,
@@ -777,13 +879,35 @@ export function processGpsLocationSample(
   const stepDist = calculateHaversineDistance(prev, newPoint);
   const impliedSpeedMps = stepDist / dtSec;
 
-  // Anti-spike filter: tolak lompatan GPS yang kecepatannya tidak mungkin saat berjalan/berlari
-  if (impliedSpeedMps > WORKOUT_CONFIG.maxPlausibleSpeedMps) {
+  const msSinceStep =
+    checkpoint.lastHardwareStepAt != null
+      ? Math.max(0, timestamp - checkpoint.lastHardwareStepAt)
+      : null;
+  const liveCadence = computeLiveCadenceSpm(checkpoint.recentStepEvents, timestamp);
+  const motion = classifyMotionActivity({
+    speedMps: speed,
+    stepRateSpm: liveCadence,
+    pedometerActive,
+    msSinceStep,
+    dtSec,
+    displacementMeters: stepDist,
+  });
+
+  // Anti-spike filter & Deteksi Laju Kendaraan Bermotor (motor/mobil):
+  // Menolak lonjakan teleport atau laju kendaraan bermotor dan menjeda sesi otomatis
+  if (impliedSpeedMps > WORKOUT_CONFIG.maxPlausibleSpeedMps || motion.isVehicle) {
+    const vehicleCp: ActiveWorkoutCheckpoint = {
+      ...checkpoint,
+      isVehicleDetected: true,
+      isAutoPaused: true,
+      motionActivity: 'in_vehicle',
+      smoothedCurrentPaceSeconds: 0,
+    };
     return {
-      checkpoint,
+      checkpoint: vehicleCp,
       acceptedPoint: false,
-      didAutoPause: false,
-      didAutoResume,
+      didAutoPause: true,
+      didAutoResume: false,
       latestCoords: coords,
     };
   }
@@ -810,10 +934,6 @@ export function processGpsLocationSample(
   }
 
   // Stationary Drift Gate: saat pedometer aktif namun tidak ada langkah dalam >= 5 detik, tolak drift kecil
-  const msSinceStep =
-    checkpoint.lastHardwareStepAt != null
-      ? Math.max(0, timestamp - checkpoint.lastHardwareStepAt)
-      : null;
   const isBypassDisplacement =
     stepDist >= WORKOUT_CONFIG.stationaryBypassDisplacementMeters &&
     accuracy != null &&
@@ -911,6 +1031,8 @@ export function processGpsLocationSample(
 
   let updatedCheckpoint: ActiveWorkoutCheckpoint = {
     ...checkpoint,
+    isVehicleDetected: false,
+    motionActivity: motion.activity,
     distanceMeters: nextDist,
     elevationGainMeters: checkpoint.elevationGainMeters + elevStep.addedGainMeters,
     smoothedAltitudeMeters: elevStep.smoothedAltitudeMeters,
