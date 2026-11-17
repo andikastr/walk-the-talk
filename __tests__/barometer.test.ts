@@ -86,7 +86,7 @@ describe('services/sensors/barometer', () => {
       unsub();
     });
 
-    it('subscribes and processes measurements with relative altitude and floor counts', async () => {
+    it('filters micro pocket noise and accumulates sustained climb', async () => {
       (Barometer.isAvailableAsync as jest.Mock).mockResolvedValue(true as never);
       let registeredListener: ((data: any) => void) | null = null;
       const removeMock = jest.fn();
@@ -102,18 +102,25 @@ describe('services/sensors/barometer', () => {
       expect(Barometer.addListener).toHaveBeenCalledTimes(1);
       expect(registeredListener).toBeDefined();
 
-      // First sample (baseline pressure)
+      // First sample (baseline)
       registeredListener!({ pressure: 1010, timestamp: 1000 });
       expect(samples).toHaveLength(1);
-      expect(samples[0].relativeAltitudeMeters).toBe(0);
       expect(samples[0].floorsClimbed).toBe(0);
 
-      // Second sample: climbed 6.5 meters (iOS relativeAltitude provided)
-      registeredListener!({ pressure: 1009.2, relativeAltitude: 6.5, timestamp: 2000 });
-      expect(samples).toHaveLength(2);
-      expect(samples[1].relativeAltitudeMeters).toBe(6.5);
-      expect(samples[1].addedGainMeters).toBe(6.5);
-      expect(samples[1].floorsClimbed).toBe(2); // 6.5 / 3 = 2 floors
+      // Micro oscillations in pocket (+0.04 hPa / -0.04 hPa ~ 0.35m)
+      registeredListener!({ pressure: 1009.96, timestamp: 2500 });
+      expect(samples[1].addedGainMeters).toBe(0); // Diredam oleh EMA & deadband 2.5m
+
+      registeredListener!({ pressure: 1010.04, timestamp: 4000 });
+      expect(samples[2].addedGainMeters).toBe(0); // Tetap 0, tidak terakumulasi sebagai tanjakan palsu
+
+      // Sustained real climb (~9.5m / 3 floors)
+      registeredListener!({ pressure: 1008.0, relativeAltitude: 12.0, timestamp: 5500 });
+      expect(samples[3].addedGainMeters).toBeGreaterThanOrEqual(2.5);
+
+      registeredListener!({ pressure: 1008.0, relativeAltitude: 12.0, timestamp: 7000 });
+      const lastSample = samples[samples.length - 1];
+      expect(lastSample.floorsClimbed).toBeGreaterThanOrEqual(1);
 
       unsub();
       expect(removeMock).toHaveBeenCalledTimes(1);

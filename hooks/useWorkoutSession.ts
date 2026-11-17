@@ -166,6 +166,7 @@ export function useWorkoutSession() {
   const activeLocationSubRef = useRef<Location.LocationSubscription | null>(null);
   const compassUnsubRef = useRef<(() => void) | null>(null);
   const barometerUnsubRef = useRef<(() => void) | null>(null);
+  const barometerActiveRef = useRef<boolean>(false);
   const pedometerSubRef = useRef<StepEventSubscription | null>(null);
 
   const pedometerActiveRef = useRef<boolean>(false);
@@ -512,6 +513,7 @@ export function useWorkoutSession() {
     let cancelled = false;
 
     const stopBarometer = () => {
+      barometerActiveRef.current = false;
       if (barometerUnsubRef.current) {
         barometerUnsubRef.current();
         barometerUnsubRef.current = null;
@@ -542,6 +544,7 @@ export function useWorkoutSession() {
           unsub();
         } else {
           barometerUnsubRef.current = unsub;
+          barometerActiveRef.current = true;
         }
       } catch {
         // Abaikan jika barometer tidak tersedia di perangkat
@@ -586,6 +589,7 @@ export function useWorkoutSession() {
         const res = processGpsLocationSample(nextCp, loc, {
           allowFallbackSteps: allowFallback,
           pedometerActive: liveForegroundPedometer,
+          hasBarometerSource: barometerActiveRef.current,
           calibratedStrides: calibratedStridesRef.current,
         });
         if (
@@ -1174,6 +1178,7 @@ export function useWorkoutSession() {
 
     setStatus('idle');
     setIsAutoPaused(false);
+    barometerActiveRef.current = false;
     setDurationSeconds(0);
     setDistanceMeters(0);
     setCurrentPaceSeconds(0);
@@ -1292,8 +1297,29 @@ export function useWorkoutSession() {
         | { trackName: string; artist: string }
         | WorkoutSoundtrackItem[]
     ): Promise<WorkoutRecord> => {
-      const cp = checkpointRef.current;
+      let cp = checkpointRef.current;
       const now = Date.now();
+
+      // Flush snapshot pedometer hardware native sesaat sebelum membekukan data sesi ke database
+      try {
+        const latestSnap = await WorkoutPedometer.getSessionSnapshotAsync();
+        if (cp && latestSnap) {
+          const reconciled = reconcileSnapshotOntoRecordingCheckpoint(
+            cp,
+            latestSnap,
+            calibratedStridesRef.current,
+            now
+          );
+          if (reconciled !== cp) {
+            checkpointRef.current = reconciled;
+            cp = reconciled;
+            setSteps(reconciled.steps);
+          }
+        }
+      } catch {
+        // Abaikan jika modul pedometer native tidak merespons
+      }
+
       const baseSoundtracks = cp?.soundtracks ?? sessionSoundtracks;
       const resolvedSoundtracks = Array.isArray(soundtrack)
         ? mergeWorkoutSoundtracks(baseSoundtracks, soundtrack, {

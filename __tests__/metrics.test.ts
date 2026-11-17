@@ -111,6 +111,14 @@ describe('services/location/metrics', () => {
       ],
     });
     expect(splitCalories).toBeGreaterThan(150);
+
+    // 89 kg brisk walking 4.5km in 50 min (5.4 km/h) on gentle road with realistic 5m elevation gain
+    const pacerComparisonWalk = estimateCalories('walk', 3000, 4500, 89, {
+      elevationGainMeters: 5,
+      isIndoor: false,
+    });
+    // MET ~4.25 * 89kg * 0.833h + 4.45 kcal climb = 319 kcal
+    expect(pacerComparisonWalk).toBe(319);
   });
 
   it('builds 1km splits cleanly and respects segment gaps', () => {

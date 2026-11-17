@@ -22,6 +22,7 @@ export interface CreateCheckpointOptions {
 export interface ProcessGpsSampleOptions {
   allowFallbackSteps: boolean;
   pedometerActive?: boolean;
+  hasBarometerSource?: boolean;
   calibratedStrides?: CalibratedStrideProfile;
 }
 
@@ -426,7 +427,9 @@ function computeElevationStep(
   prevSmoothedAlt: number | null,
   prevAnchorAlt: number | null,
   rawAltitude: number | null | undefined,
-  dtSec: number
+  dtSec: number,
+  horizontalDistMeters: number = 0,
+  hasBarometerSource: boolean = false
 ): {
   smoothedAltitudeMeters: number | null;
   elevationAnchorMeters: number | null;
@@ -453,6 +456,16 @@ function computeElevationStep(
     };
   }
 
+  // Jika barometer tersedia & aktif, barometer adalah single source of truth untuk vertical gain.
+  // GPS altitude tetap diperbarui untuk visualisasi rute, tapi tidak menambahkan gain ganda.
+  if (hasBarometerSource) {
+    return {
+      smoothedAltitudeMeters: smoothed,
+      elevationAnchorMeters: smoothed,
+      addedGainMeters: 0,
+    };
+  }
+
   const verticalDelta = smoothed - prevAnchorAlt;
   const maxStepAllowance =
     WORKOUT_CONFIG.maxSingleElevationStepMeters * Math.max(1, dtSec / 3);
@@ -466,11 +479,18 @@ function computeElevationStep(
     };
   }
 
+  // Slope Plausibility Clamp (GPS Fallback): kemiringan tanjakan jalan raya normal jarang melebihi 22%
+  const maxSlopeDelta = Math.max(
+    WORKOUT_CONFIG.elevationNoiseThresholdMeters,
+    horizontalDistMeters * 0.22
+  );
+
   if (verticalDelta >= WORKOUT_CONFIG.elevationNoiseThresholdMeters) {
+    const clampedGain = Math.min(verticalDelta, maxSlopeDelta);
     return {
       smoothedAltitudeMeters: smoothed,
       elevationAnchorMeters: smoothed,
-      addedGainMeters: verticalDelta,
+      addedGainMeters: clampedGain,
     };
   }
 
@@ -838,7 +858,9 @@ export function processGpsLocationSample(
       checkpoint.smoothedAltitudeMeters,
       checkpoint.elevationAnchorMeters,
       altitude,
-      0
+      0,
+      0,
+      Boolean(options.hasBarometerSource)
     );
     checkpoint = {
       ...checkpoint,
@@ -988,7 +1010,9 @@ export function processGpsLocationSample(
     checkpoint.smoothedAltitudeMeters,
     checkpoint.elevationAnchorMeters,
     altitude,
-    dtSec
+    dtSec,
+    stepDist,
+    Boolean(options.hasBarometerSource)
   );
 
   const nextDist = checkpoint.distanceMeters + netAddedDist;

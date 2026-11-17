@@ -703,6 +703,68 @@ describe('services/location/tracking-engine', () => {
       const updated = applyBarometricMeasurementToCheckpoint(cp, 5.0, 1);
       expect(updated).toBe(cp);
     });
+
+    it('prevents GPS double-counting when hasBarometerSource is true', () => {
+      const start = 4_000_000;
+      let cp = createInitialCheckpoint({
+        type: 'walk',
+        trackingMode: 'outdoor',
+        autoPauseEnabled: true,
+        weightKg: 65,
+        now: start,
+      });
+
+      // Anchor initial point with altitude 25m
+      const anchor = processGpsLocationSample(
+        cp,
+        makeLoc(-6.2, 106.8, start + 1000, { accuracy: 8, altitude: 25 }),
+        { allowFallbackSteps: true, hasBarometerSource: true }
+      );
+      cp = anchor.checkpoint;
+
+      // Second point: GPS altitude rises by 15m over 30m horizontal displacement
+      const secondSample = processGpsLocationSample(
+        cp,
+        makeLoc(-6.2003, 106.8, start + 7000, { accuracy: 8, altitude: 40, speed: 1.4 }),
+        { allowFallbackSteps: true, hasBarometerSource: true }
+      );
+
+      expect(secondSample.acceptedPoint).toBe(true);
+      // elevationGainMeters must NOT increase from GPS when hasBarometerSource is true!
+      expect(secondSample.checkpoint.elevationGainMeters).toBe(0);
+      // But smoothedAltitudeMeters for route mapping should still be tracked
+      expect(secondSample.checkpoint.smoothedAltitudeMeters).toBeGreaterThan(25);
+    });
+
+    it('clamps unrealistic vertical slope in GPS fallback when displacement is small', () => {
+      const start = 5_000_000;
+      let cp = createInitialCheckpoint({
+        type: 'walk',
+        trackingMode: 'outdoor',
+        autoPauseEnabled: true,
+        weightKg: 65,
+        now: start,
+      });
+
+      // Anchor initial point
+      const anchor = processGpsLocationSample(
+        cp,
+        makeLoc(-6.2, 106.8, start + 1000, { accuracy: 8, altitude: 20 }),
+        { allowFallbackSteps: true, hasBarometerSource: false }
+      );
+      cp = anchor.checkpoint;
+
+      // Second point: moved only ~11 meters horizontally, but GPS altitude jumped 18m
+      const secondSample = processGpsLocationSample(
+        cp,
+        makeLoc(-6.2001, 106.8, start + 7000, { accuracy: 8, altitude: 38, speed: 1.4 }),
+        { allowFallbackSteps: true, hasBarometerSource: false }
+      );
+
+      expect(secondSample.acceptedPoint).toBe(true);
+      // Slope clamp (~22% of ~11m displacement or threshold) clamps gain instead of raw +18m jump
+      expect(secondSample.checkpoint.elevationGainMeters).toBeLessThan(10);
+    });
   });
 });
 

@@ -1,8 +1,9 @@
 import { Barometer, type BarometerMeasurement } from 'expo-sensors';
 
-const SEA_LEVEL_PRESSURE_HPA = 1013.25;
-const METERS_PER_FLOOR = 3.0;
-const BAROMETRIC_NOISE_DEADBAND_METERS = 0.35;
+export const SEA_LEVEL_PRESSURE_HPA = 1013.25;
+export const METERS_PER_FLOOR = 3.0;
+export const BAROMETRIC_NOISE_DEADBAND_METERS = 2.5;
+export const BAROMETER_EMA_ALPHA = 0.25;
 
 /**
  * Menghitung estimasi perbedaan ketinggian (meter) dari tekanan udara (hPa)
@@ -86,6 +87,8 @@ export async function startBarometerWatcher(
   }
 
   let baselinePressure: number | null = null;
+  let smoothedPressure: number | null = null;
+  let smoothedAltitude: number | null = null;
   let prevAltitudeAnchor: number | null = null;
   let accumulatedGainMeters = 0;
   let isCancelled = false;
@@ -99,35 +102,45 @@ export async function startBarometerWatcher(
       baselinePressure = pressure;
     }
 
+    smoothedPressure =
+      smoothedPressure === null
+        ? pressure
+        : smoothedPressure * (1 - BAROMETER_EMA_ALPHA) + pressure * BAROMETER_EMA_ALPHA;
+
     // iOS CMAltimeter langsung menyediakan relativeAltitude dalam meter;
-    // Android Sensor.TYPE_PRESSURE dikonversi melalui formula hipsometrik atmosfer
-    const rawAltitude =
+    // Android Sensor.TYPE_PRESSURE dikonversi melalui formula hipsometrik atmosfer berbasis smoothedPressure
+    const rawAlt =
       typeof relativeAltitude === 'number' && Number.isFinite(relativeAltitude)
         ? relativeAltitude
-        : pressureToRelativeAltitudeMeters(pressure, baselinePressure);
+        : pressureToRelativeAltitudeMeters(smoothedPressure, baselinePressure);
+
+    smoothedAltitude =
+      smoothedAltitude === null
+        ? rawAlt
+        : smoothedAltitude * (1 - BAROMETER_EMA_ALPHA) + rawAlt * BAROMETER_EMA_ALPHA;
 
     if (prevAltitudeAnchor === null) {
-      prevAltitudeAnchor = rawAltitude;
+      prevAltitudeAnchor = smoothedAltitude;
     }
 
-    const verticalDelta = rawAltitude - prevAltitudeAnchor;
+    const verticalDelta = smoothedAltitude - prevAltitudeAnchor;
     let addedGain = 0;
 
-    // Hysteresis deadband untuk meredam noise mikro getaran hembusan angin (< 0.35m)
+    // Hysteresis deadband untuk meredam noise mikro ayunan saku celana (< 2.5m)
     if (verticalDelta >= BAROMETRIC_NOISE_DEADBAND_METERS) {
       addedGain = verticalDelta;
       accumulatedGainMeters += addedGain;
-      prevAltitudeAnchor = rawAltitude;
+      prevAltitudeAnchor = smoothedAltitude;
     } else if (verticalDelta <= -BAROMETRIC_NOISE_DEADBAND_METERS) {
       // Menurun tidak menambah gain, tapi memperbarui titik jangkar
-      prevAltitudeAnchor = rawAltitude;
+      prevAltitudeAnchor = smoothedAltitude;
     }
 
     const floors = calculateFloorsClimbed(accumulatedGainMeters);
 
     onSample({
-      pressureHpa: pressure,
-      relativeAltitudeMeters: Math.round(rawAltitude * 10) / 10,
+      pressureHpa: Math.round(smoothedPressure * 100) / 100,
+      relativeAltitudeMeters: Math.round(smoothedAltitude * 10) / 10,
       addedGainMeters: Math.round(addedGain * 10) / 10,
       floorsClimbed: floors,
       timestamp: Date.now(),
